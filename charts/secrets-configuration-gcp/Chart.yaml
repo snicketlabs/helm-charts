@@ -1,0 +1,5 @@
+apiVersion: v2
+name: secrets-configuration-gcp
+description: ESO-based secrets configuration for the Snicket Labs platform (GCP). Syncs GCP Secret Manager secrets into native Kubernetes Secrets via External Secrets Operator + Workload Identity. The ESO operator itself is installed separately (tf-dt-external-secrets).
+type: application
+version: 0.2.0

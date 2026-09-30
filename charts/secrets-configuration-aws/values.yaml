@@ -1,0 +1,37 @@
+# these are placeholder values. Please replace with your own values before installing the chart.
+apiSecretName: my-cluster-secrets # output of terraform is api_secret_name
+rdsPgSecretName: my-cluster-rds-pg # output of terraform is rds_pg_secret_name
+clusterName: my-cluster # output of terraform is eks_cluster_details.cluster_name
+userSecretName: my-cluster-owning-user-credentials # output of terraform is user_secret_name
+secretStoreRoleArn: arn:aws:iam::123456789012:role/my-cluster-secrets-role # output of terraform is secret_store_role_arn
+redisSecretName: my-cluster-redis # output of terraform is redis_secret_name
+dockerSecretName: snicketlabs-docker-secret # created by hand in AWS Secrets Manager
+honeybadgerSecretName: snicketlabs-honeybadger-secret # created by hand in AWS Secrets Manager
+smtp:
+  enabled: false
+  smtpSecretName: my-cluster-smtp # output of terraform is smtp_secret_name if enabled.
+  k8sSecretName: smtp-secrets # name of the Kubernetes secret created for SMTP credentials
+
+# ServiceAccount the syncer runs as. Its IRSA role trusts
+# <namespace>:<name>, so both have to agree with tf-dt-eks's
+# secret_sync_namespace_service_accounts.
+serviceAccount:
+  name: secret-sync-sa
+
+# SecretProviderClass names are <component>-secret-provider-class, or
+# <prefix>-<component>-secret-provider-class when a prefix is set.
+secretProviderClassPrefix: ""
+
+# Kubernetes Secrets the chart creates, in the release namespace. They must
+# match the names the application chart consumes.
+k8sSecretNames:
+  rdsPg: postgres-credentials
+  api: api-secrets
+  user: owning-user-credentials
+  redis: "" # empty -> defaults to "<clusterName>-redis"
+  docker: dockerconfig
+  honeybadger: honeybadger-api-key
+
+secretSyncer:
+  enabled: true
+  image: public.ecr.aws/docker/library/busybox:1.36
