@@ -1,3 +1,27 @@
 apiVersion: v1
-entries: {}
-generated: "2026-09-28T00:00:00Z"
+entries:
+  secrets-configuration-aws:
+  - apiVersion: v2
+    created: "2026-09-30T16:23:12.5800999Z"
+    description: A Helm chart to configure secrets for the Snicket Labs platform.
+      Depends on EKS ASCP and AWS Secrets Manager.
+    digest: 58e3d9d91ecabf99d0cafb0991f068dbc69896061738ee31622002acebf62f57
+    name: secrets-configuration-aws
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-aws-0.2.0/secrets-configuration-aws-0.2.0.tgz
+    version: 0.2.0
+  secrets-configuration-gcp:
+  - apiVersion: v2
+    created: "2026-09-30T16:23:12.855852072Z"
+    description: ESO-based secrets configuration for the Snicket Labs platform (GCP).
+      Syncs GCP Secret Manager secrets into native Kubernetes Secrets via External
+      Secrets Operator + Workload Identity. The ESO operator itself is installed separately
+      (tf-dt-external-secrets).
+    digest: 003f01a8533293c573a035d2326821fa0e7ed01aae9ba58ce04bdaad9edc4ce5
+    name: secrets-configuration-gcp
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.2.0/secrets-configuration-gcp-0.2.0.tgz
+    version: 0.2.0
+generated: "2026-09-30T16:23:12.855868643Z"
