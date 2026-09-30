@@ -1,0 +1,69 @@
+# Placeholder values — replace before installing.
+# Everything is created in the release namespace (helm -n).
+
+clusterName: my-cluster # used to derive default k8s secret names
+
+refreshInterval: 1h
+
+serviceAccount:
+  name: secret-sync-sa
+  # Cloud-provider IAM annotations for workload identity, e.g.:
+  #   GKE: iam.gke.io/gcp-service-account: <GSA email>
+  #   EKS: eks.amazonaws.com/role-arn: <IAM role ARN>
+  annotations: {}
+
+secretStore:
+  name: gcp-secret-store
+  # The SecretStore provider spec, passed through verbatim. Replace with the
+  # block for your backend (gcpsm, aws, vault, ...). Example for GCP Secret
+  # Manager with Workload Identity:
+  provider:
+    gcpsm:
+      projectID: my-gcp-project
+      auth:
+        workloadIdentity:
+          clusterLocation: us-central1 # GKE cluster location (region or zone)
+          clusterName: my-cluster
+          serviceAccountRef:
+            name: secret-sync-sa
+  # Example for AWS Secrets Manager with IRSA (the SA needs the
+  # eks.amazonaws.com/role-arn annotation above):
+  # provider:
+  #   aws:
+  #     service: SecretsManager
+  #     region: us-east-1
+  #     auth:
+  #       jwt:
+  #         serviceAccountRef:
+  #           name: secret-sync-sa
+
+# Secret Manager secret names (Terraform outputs / manually created).
+secretNames:
+  cloudSql: my-cluster-cloud-sql               # tf-dt-cloud-sql (gcp) / tf-dt-rds-pg (aws)
+  redis: my-cluster-redis                      # tf-dt-memorystore (gcp) / tf-dt-elasticache-redis (aws)
+  api: my-cluster-api-secrets                  # gcp/tf-hosted-modules/tf-dt-application-secrets (gcp) / aws/tf-hosted-modules/tf-dt-application-secrets (aws)
+  user: my-cluster-user-password               # gcp/tf-hosted-modules/tf-dt-application-secrets (gcp) / aws/tf-hosted-modules/tf-dt-application-secrets (aws)
+  docker: snicketlabs-docker-secret            # manually created (gcloud / aws)
+  honeybadger: snicketlabs-honeybadger-secret  # manually created (gcloud / aws)
+
+# k8s Secret names produced. 
+k8sSecretNames:
+  rdsPg: postgres-credentials
+  api: api-secrets
+  user: owning-user-credentials
+  redis: "" # empty -> defaults to "<clusterName>-redis" 
+  docker: dockerconfig
+  honeybadger: honeybadger-api-key
+
+smtp:
+  enabled: false
+  secretName: my-cluster-smtp
+  k8sSecretName: smtp-secrets
+
+# GCS S3-interop HMAC creds for Active Storage. GCP-only — on AWS the
+# app uses IRSA, so there is no static-credentials Secret. Disable when using
+# native GCS + Workload Identity instead.
+gcsS3Interop:
+  enabled: true
+  secretName: my-cluster-gcs-hmac  # tf-dt-gcs-active-storage hmac_secret_name
+  k8sSecretName: s3-credentials    # consumed by the platform chart (S3_ACCESS_KEY/S3_SECRET_KEY)
