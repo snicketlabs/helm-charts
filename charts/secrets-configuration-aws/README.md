@@ -14,7 +14,7 @@ The chart creates multiple `SecretProviderClass` resources to retrieve secrets f
 
 - **API Secrets** - Application API keys and credentials
 - **Database Secrets** - PostgreSQL RDS connection details
-- **Redis Secrets** - ElastiCache Redis connection credentials
+- **Redis Secrets** (optional) - ElastiCache Redis connection credentials, unless `redis.enabled: false`
 - **User Secrets** - Owning user credentials
 - **SMTP Secrets** (optional) - Email configuration when `smtp.enabled: true`
 
@@ -56,7 +56,7 @@ aws secretsmanager create-secret \
 ```yaml
 apiSecretName: your-env-secrets
 rdsPgSecretName: your-env-rds-pg
-redisSecretName: your-env-redis
+redisSecretName: your-env-redis # omit with redis.enabled: false
 clusterName: your-cluster-name
 userSecretName: your-env-owning-user-credentials
 secretStoreRoleArn: arn:aws:iam::ACCOUNT_ID:role/your-secrets-role
@@ -79,7 +79,8 @@ Everything is created in the release namespace (`-n`), so install into the names
 |-----------|-------------|----------|
 | `apiSecretName` | Name of the API secrets in AWS Secrets Manager | Yes |
 | `rdsPgSecretName` | Name of the RDS PostgreSQL secret | Yes |
-| `redisSecretName` | Name of the Redis secret | Yes |
+| `redis.enabled` | Sync the Redis secret. Turn off once the application no longer uses Redis | No (default: true) |
+| `redisSecretName` | Name of the Redis secret | When `redis.enabled` |
 | `clusterName` | EKS cluster name | Yes |
 | `userSecretName` | Name of the user credentials secret | Yes |
 | `secretStoreRoleArn` | IAM role ARN for accessing secrets | Yes |
@@ -109,3 +110,4 @@ Everything is created in the release namespace (`-n`), so install into the names
 - Secrets are synchronized from AWS Secrets Manager when pods start or restart
 - The ServiceAccount with IAM role annotation must be used by pods that need access to these secrets
 - SMTP secrets are only created when `smtp.enabled: true` in values.yaml
+- Redis secrets are only created when `redis.enabled: true` (the default)

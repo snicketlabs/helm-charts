@@ -4,9 +4,13 @@ rdsPgSecretName: my-cluster-rds-pg # output of terraform is rds_pg_secret_name
 clusterName: my-cluster # output of terraform is eks_cluster_details.cluster_name
 userSecretName: my-cluster-owning-user-credentials # output of terraform is user_secret_name
 secretStoreRoleArn: arn:aws:iam::123456789012:role/my-cluster-secrets-role # output of terraform is secret_store_role_arn
-redisSecretName: my-cluster-redis # output of terraform is redis_secret_name
+redisSecretName: my-cluster-redis # output of terraform is redis_secret_name. Ignored when redis.enabled is false.
 dockerSecretName: snicketlabs-docker-secret # created by hand in AWS Secrets Manager
 honeybadgerSecretName: snicketlabs-honeybadger-secret # created by hand in AWS Secrets Manager
+# Off for an application that no longer uses Redis (GoodJob keeps its queue in
+# Postgres). On by default so existing installs keep the Redis Secret.
+redis:
+  enabled: true
 smtp:
   enabled: false
   smtpSecretName: my-cluster-smtp # output of terraform is smtp_secret_name if enabled.
