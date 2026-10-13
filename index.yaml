@@ -2,6 +2,16 @@ apiVersion: v1
 entries:
   secrets-configuration-aws:
   - apiVersion: v2
+    created: "2026-10-13T09:12:34.159259532Z"
+    description: A Helm chart to configure secrets for the Snicket Labs platform.
+      Depends on EKS ASCP and AWS Secrets Manager.
+    digest: 7931d8377a9ec2d9873ae6dd8180bbfce2a7e0a4e924d76d7b900d030ef80fd7
+    name: secrets-configuration-aws
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-aws-0.3.0/secrets-configuration-aws-0.3.0.tgz
+    version: 0.3.0
+  - apiVersion: v2
     created: "2026-09-30T16:23:12.5800999Z"
     description: A Helm chart to configure secrets for the Snicket Labs platform.
       Depends on EKS ASCP and AWS Secrets Manager.
@@ -12,6 +22,18 @@ entries:
     - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-aws-0.2.0/secrets-configuration-aws-0.2.0.tgz
     version: 0.2.0
   secrets-configuration-gcp:
+  - apiVersion: v2
+    created: "2026-10-13T09:12:34.397273045Z"
+    description: ESO-based secrets configuration for the Snicket Labs platform (GCP).
+      Syncs GCP Secret Manager secrets into native Kubernetes Secrets via External
+      Secrets Operator + Workload Identity. The ESO operator itself is installed separately
+      (tf-dt-external-secrets).
+    digest: 92873e485a9a7cb132ef0e28a67d11312ccfa1ce69019d35273c41b90a42afbd
+    name: secrets-configuration-gcp
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.3.0/secrets-configuration-gcp-0.3.0.tgz
+    version: 0.3.0
   - apiVersion: v2
     created: "2026-09-30T16:23:12.855852072Z"
     description: ESO-based secrets configuration for the Snicket Labs platform (GCP).
@@ -24,4 +46,4 @@ entries:
     urls:
     - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.2.0/secrets-configuration-gcp-0.2.0.tgz
     version: 0.2.0
-generated: "2026-09-30T16:23:12.855868643Z"
+generated: "2026-10-13T09:12:34.397290504Z"
