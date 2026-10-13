@@ -55,6 +55,12 @@ k8sSecretNames:
   docker: dockerconfig
   honeybadger: honeybadger-api-key
 
+# Off for an application that no longer uses Redis (GoodJob keeps its queue in
+# Postgres); secretNames.redis is then ignored. On by default so existing
+# installs keep the Redis Secret.
+redis:
+  enabled: true
+
 smtp:
   enabled: false
   secretName: my-cluster-smtp

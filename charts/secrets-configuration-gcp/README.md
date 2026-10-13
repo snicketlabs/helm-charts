@@ -9,14 +9,14 @@ GKE Workload Identity. Produces the **same Kubernetes Secrets** (names + keys) a
 ## Prerequisites
 
 1. **ESO operator installed** in the cluster — done separately via the
-   `tf-dt-external-secrets` Terraform module (sc-22517), not this chart.
+   `tf-dt-external-secrets` Terraform module, not this chart.
 2. **Workload Identity GSA** with `roles/secretmanager.secretAccessor`, bound to
    this chart's ServiceAccount — done in Terraform via `tf-dt-workload-identity`
-   (sc-22516), `use_existing_k8s_sa = true` against `serviceAccount.name`. Set the
+   with `use_existing_k8s_sa = true` against `serviceAccount.name`. Set the
    GSA email in `serviceAccount.gcpServiceAccount` for the KSA annotation.
 3. **The source secrets exist** in GCP Secret Manager:
-   - Cloud SQL (`tf-dt-cloud-sql`) and Memorystore (`tf-dt-memorystore`) write theirs.
-   - API + owning-user secrets: `tf-dt-application-secrets` (sc-22740).
+   - Cloud SQL (`tf-dt-cloud-sql`) and, with `redis.enabled`, Memorystore (`tf-dt-memorystore`) write theirs.
+   - API + owning-user secrets: `tf-dt-application-secrets`.
    - `snicketlabs-docker-secret` + `snicketlabs-honeybadger-secret`: created manually (below).
 
 ## Prerequisites: manually created secrets (GCP)
@@ -49,9 +49,12 @@ covers reading these alongside the Terraform-created secrets.
 - A namespaced **`SecretStore`** (`gcpsm` provider + Workload Identity auth).
 - A **`ServiceAccount`** carrying the `iam.gke.io/gcp-service-account` annotation.
 - **`ExternalSecret`s** producing: `postgres-credentials`, `api-secrets`,
-  `owning-user-credentials`, `<clusterName>-redis`, `dockerconfig`,
-  `honeybadger-api-key`, `s3-credentials` (GCS S3-interop HMAC, sc-22742),
-  and (optional) `smtp-secrets`.
+  `owning-user-credentials`, `dockerconfig`, `honeybadger-api-key`,
+  `s3-credentials` (GCS S3-interop HMAC), and optionally
+  `<clusterName>-redis` (unless `redis.enabled: false`) and `smtp-secrets`.
+
+Set `redis.enabled: false` for an application on GoodJob, which has no Redis
+(and no Memorystore instance) behind it.
 
 ## Open reconciliation points (flagged in templates)
 
