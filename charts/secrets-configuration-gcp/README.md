@@ -15,7 +15,7 @@ GKE Workload Identity. Produces the **same Kubernetes Secrets** (names + keys) a
    with `use_existing_k8s_sa = true` against `serviceAccount.name`. Set the
    GSA email in `serviceAccount.gcpServiceAccount` for the KSA annotation.
 3. **The source secrets exist** in GCP Secret Manager:
-   - Cloud SQL (`tf-dt-cloud-sql`) and, with `redis.enabled`, Memorystore (`tf-dt-memorystore`) write theirs.
+   - Cloud SQL (`tf-dt-cloud-sql`) writes its own.
    - API + owning-user secrets: `tf-dt-application-secrets`.
    - `snicketlabs-docker-secret` + `snicketlabs-honeybadger-secret`: created manually (below).
 
@@ -50,17 +50,10 @@ covers reading these alongside the Terraform-created secrets.
 - A **`ServiceAccount`** carrying the `iam.gke.io/gcp-service-account` annotation.
 - **`ExternalSecret`s** producing: `postgres-credentials`, `api-secrets`,
   `owning-user-credentials`, `dockerconfig`, `honeybadger-api-key`,
-  `s3-credentials` (GCS S3-interop HMAC), and optionally
-  `<clusterName>-redis` (unless `redis.enabled: false`) and `smtp-secrets`.
-
-Set `redis.enabled: false` for an application on GoodJob, which has no Redis
-(and no Memorystore instance) behind it.
+  `s3-credentials` (GCS S3-interop HMAC), and optionally `smtp-secrets`.
 
 ## Open reconciliation points (flagged in templates)
 
-- **Redis keys:** the app's k8s Secret uses `url` / `elasticache_url` / `endpoint`
-  (AWS-branded). The GCP Memorystore secret has `host`/`port`/`auth`/`url`, so we map
-  `url<-url`, `endpoint<-host`, `elasticache_url<-url`. Confirm against what the app reads.
 - **Cloud SQL `db_name`:** GCP secret key is `dbname`; remapped to the app's `db_name`.
 
 Replace the placeholder values in `values.yaml` (project, cluster, secret names,
