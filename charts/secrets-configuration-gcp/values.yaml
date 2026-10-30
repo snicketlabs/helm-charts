@@ -40,7 +40,6 @@ secretStore:
 # Secret Manager secret names (Terraform outputs / manually created).
 secretNames:
   cloudSql: my-cluster-cloud-sql               # tf-dt-cloud-sql (gcp) / tf-dt-rds-pg (aws)
-  redis: my-cluster-redis                      # tf-dt-memorystore (gcp) / tf-dt-elasticache-redis (aws)
   api: my-cluster-api-secrets                  # gcp/tf-hosted-modules/tf-dt-application-secrets (gcp) / aws/tf-hosted-modules/tf-dt-application-secrets (aws)
   user: my-cluster-user-password               # gcp/tf-hosted-modules/tf-dt-application-secrets (gcp) / aws/tf-hosted-modules/tf-dt-application-secrets (aws)
   docker: snicketlabs-docker-secret            # manually created (gcloud / aws)
@@ -51,15 +50,8 @@ k8sSecretNames:
   rdsPg: postgres-credentials
   api: api-secrets
   user: owning-user-credentials
-  redis: "" # empty -> defaults to "<clusterName>-redis" 
   docker: dockerconfig
   honeybadger: honeybadger-api-key
-
-# Off for an application that no longer uses Redis (GoodJob keeps its queue in
-# Postgres); secretNames.redis is then ignored. On by default so existing
-# installs keep the Redis Secret.
-redis:
-  enabled: true
 
 smtp:
   enabled: false

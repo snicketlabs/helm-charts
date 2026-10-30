@@ -14,7 +14,6 @@ The chart creates multiple `SecretProviderClass` resources to retrieve secrets f
 
 - **API Secrets** - Application API keys and credentials
 - **Database Secrets** - PostgreSQL RDS connection details
-- **Redis Secrets** (optional) - ElastiCache Redis connection credentials, unless `redis.enabled: false`
 - **User Secrets** - Owning user credentials
 - **SMTP Secrets** (optional) - Email configuration when `smtp.enabled: true`
 
@@ -26,7 +25,7 @@ The chart creates a Kubernetes ServiceAccount annotated with an IAM role ARN. Th
 
 1. **AWS Secrets Manager** - Secrets must be created in AWS Secrets Manager.
 
-If you have used the reference architecture Terraform modules, the RDS, Redis, Owning User Credentials and API secrets will automatically be stored in AWS Secrets Manager. 
+If you have used the reference architecture Terraform modules, the RDS, Owning User Credentials and API secrets will automatically be stored in AWS Secrets Manager. 
 
 **You must manually create both the honeybadger and docker secrets in AWS Secrets Manager. These values will be provided securely by Snicket Labs to you.**
 
@@ -56,7 +55,6 @@ aws secretsmanager create-secret \
 ```yaml
 apiSecretName: your-env-secrets
 rdsPgSecretName: your-env-rds-pg
-redisSecretName: your-env-redis # omit with redis.enabled: false
 clusterName: your-cluster-name
 userSecretName: your-env-owning-user-credentials
 secretStoreRoleArn: arn:aws:iam::ACCOUNT_ID:role/your-secrets-role
@@ -79,8 +77,6 @@ Everything is created in the release namespace (`-n`), so install into the names
 |-----------|-------------|----------|
 | `apiSecretName` | Name of the API secrets in AWS Secrets Manager | Yes |
 | `rdsPgSecretName` | Name of the RDS PostgreSQL secret | Yes |
-| `redis.enabled` | Sync the Redis secret. Turn off once the application no longer uses Redis | No (default: true) |
-| `redisSecretName` | Name of the Redis secret | When `redis.enabled` |
 | `clusterName` | EKS cluster name | Yes |
 | `userSecretName` | Name of the user credentials secret | Yes |
 | `secretStoreRoleArn` | IAM role ARN for accessing secrets | Yes |
@@ -94,7 +90,6 @@ Everything is created in the release namespace (`-n`), so install into the names
 | `k8sSecretNames.rdsPg` | Kubernetes Secret the RDS credentials sync into | No (default: `postgres-credentials`) |
 | `k8sSecretNames.api` | Kubernetes Secret the API secrets sync into | No (default: `api-secrets`) |
 | `k8sSecretNames.user` | Kubernetes Secret the owning user password syncs into | No (default: `owning-user-credentials`) |
-| `k8sSecretNames.redis` | Kubernetes Secret the Redis connection details sync into | No (default: `<clusterName>-redis`) |
 | `k8sSecretNames.docker` | Kubernetes Secret the Docker registry credentials sync into | No (default: `dockerconfig`) |
 | `k8sSecretNames.honeybadger` | Kubernetes Secret the Honeybadger API key syncs into | No (default: `honeybadger-api-key`) |
 
@@ -110,4 +105,3 @@ Everything is created in the release namespace (`-n`), so install into the names
 - Secrets are synchronized from AWS Secrets Manager when pods start or restart
 - The ServiceAccount with IAM role annotation must be used by pods that need access to these secrets
 - SMTP secrets are only created when `smtp.enabled: true` in values.yaml
-- Redis secrets are only created when `redis.enabled: true` (the default)
