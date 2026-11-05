@@ -1,0 +1,16 @@
+{{- if .Values.ingress.ingressClassParams.create }}
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata:
+  name: {{ .Values.ingress.className }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  group:
+    name: {{ .Values.ingress.className }}
+  scheme: {{ .Values.ingress.ingressClassParams.scheme | default "internet-facing" }}
+  {{- with .Values.ingress.ingressClassParams.loadBalancerAttributes }}
+  loadBalancerAttributes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

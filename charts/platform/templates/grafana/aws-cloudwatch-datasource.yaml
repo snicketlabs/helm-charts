@@ -1,0 +1,20 @@
+{{- if and .Values.monitoring.awsDashboards (default false .Values.monitoring.awsDashboards.enabled) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-cloudwatch-datasource
+  labels:
+    grafana_datasource: "1"
+data:
+  cloudwatch-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: CloudWatch
+        type: cloudwatch
+        access: proxy
+        isDefault: false
+        jsonData:
+          authType: assume_role
+          defaultRegion: {{ .Values.monitoring.awsDashboards.cloudwatch.defaultRegion | quote }}
+          assumeRoleArn: {{ .Values.monitoring.awsDashboards.cloudwatch.assumeRoleArn | quote }}
+{{- end }}

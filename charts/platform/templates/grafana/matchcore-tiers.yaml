@@ -1,0 +1,1116 @@
+{{- if and .Values.monitoring.matchDashboards (default false .Values.monitoring.matchDashboards.enabled) }}
+{{- /* Long-lived worker container in a matchcore job pod. Those tiers render a
+       single Ruby container from the main image. */ -}}
+{{- $workerContainer := "good-job" }}
+{{- $fullname := include "platform.fullname" . }}
+{{- /* Tier list comes from the chart's own scaledJobs keys so a tier added or
+       dropped in values.yaml needs no second edit here. The 4core HDR tier was
+       dropped this way once hub stopped routing to it; this keeps that from
+       silently leaving a dead entry in the variable. */ -}}
+{{- $tiers := list }}
+{{- range $name, $job := .Values.scaledJobs }}
+{{- if and (hasSuffix "-matchcore" $name) $job.enabled }}
+{{- $tiers = append $tiers $name }}
+{{- end }}
+{{- end }}
+{{- $tiers = sortAlpha $tiers }}
+{{- if $tiers }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: matchcore-tiers-{{ $fullname }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  matchcore-tiers.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": {
+              "type": "grafana",
+              "uid": "-- Grafana --"
+            },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "panels": [],
+          "title": "Jobs",
+          "type": "row",
+          "id": 1
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pgds}"
+          },
+          "description": "Every matchcore fingerprint job in flight right now, from good_jobs joined through to the material it is working on. min_per_min is wall time so far per minute of source, so it only settles once the job finishes.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "min_per_min"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "gradient"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green",
+                          "value": null
+                        },
+                        {
+                          "color": "yellow",
+                          "value": 1
+                        },
+                        {
+                          "color": "red",
+                          "value": 2.5
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 1
+          },
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "${pgds}"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT g.queue_name AS tier,\n       m.identifier AS material,\n       im.expected_duration AS source_s,\n       ROUND(EXTRACT(EPOCH FROM (now() - g.performed_at)) / 60, 1) AS running_min,\n       ROUND((EXTRACT(EPOCH FROM (now() - g.performed_at))\n              / NULLIF(im.expected_duration, 0))::numeric, 2) AS min_per_min,\n       g.executions_count AS attempt,\n       g.performed_at AS started,\n       j.id AS task_id\n  FROM good_jobs g\n  JOIN jobs j\n    ON j.id = substring(g.serialized_params->'arguments'->>0 from '([0-9a-f-]{36})$')::uuid\n  JOIN ingest_masters im ON im.pipeline_id = j.pipeline_id\n  JOIN materials m ON m.id = im.material_id\n  WHERE replace(g.queue_name, '_', '-') IN (${tier:sqlstring})\n    AND g.performed_at IS NOT NULL\n    AND g.finished_at IS NULL\n  ORDER BY g.performed_at",
+              "refId": "A"
+            }
+          ],
+          "title": "Running matchcore jobs",
+          "type": "table",
+          "id": 2
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${pgds}"
+          },
+          "description": "Completed and failed jobs in the dashboard time range. min_per_min is the figure to compare against internal/SIZING.md; outcome is 'ok' or the error class, so a timeout or an OOM-driven retry is visible here.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "min_per_min"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background",
+                      "mode": "gradient"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green",
+                          "value": null
+                        },
+                        {
+                          "color": "yellow",
+                          "value": 1
+                        },
+                        {
+                          "color": "red",
+                          "value": 2.5
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "outcome"
+                },
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "ok": {
+                            "color": "green",
+                            "index": 0,
+                            "text": "ok"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "${pgds}"
+              },
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT g.queue_name AS tier,\n       m.identifier AS material,\n       im.expected_duration AS source_s,\n       ROUND(EXTRACT(EPOCH FROM (g.finished_at - g.performed_at)) / 60, 1) AS wall_min,\n       ROUND((EXTRACT(EPOCH FROM (g.finished_at - g.performed_at))\n              / NULLIF(im.expected_duration, 0))::numeric, 2) AS min_per_min,\n       CASE WHEN g.error IS NULL THEN 'ok' ELSE split_part(g.error, ':', 1) END AS outcome,\n       g.executions_count AS attempt,\n       g.performed_at AS started\n  FROM good_jobs g\n  JOIN jobs j\n    ON j.id = substring(g.serialized_params->'arguments'->>0 from '([0-9a-f-]{36})$')::uuid\n  JOIN ingest_masters im ON im.pipeline_id = j.pipeline_id\n  JOIN materials m ON m.id = im.material_id\n  WHERE replace(g.queue_name, '_', '-') IN (${tier:sqlstring})\n    AND g.finished_at IS NOT NULL\n    AND $__timeFilter(g.performed_at)\n  ORDER BY g.performed_at DESC",
+              "refId": "A"
+            }
+          ],
+          "title": "Finished matchcore jobs",
+          "type": "table",
+          "id": 3
+        },
+        {
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 17
+          },
+          "panels": [],
+          "title": "Resources",
+          "type": "row",
+          "id": 4
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Dashed lines are the pod's request and limit. MATCHCORE_THREADS is set to the CPU limit in cores and passed to both match and ffmpeg, so a pod can ask for roughly twice its limit \u2014 see sc-24736.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 18
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }}",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"cpu\"})",
+              "legendFormat": "{{ `{{` }} pod }} request",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"cpu\"})",
+              "legendFormat": "{{ `{{` }} pod }} limit",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "CPU: used vs request vs limit",
+          "type": "timeseries",
+          "id": 5
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Share of CFS periods in which the container was throttled. Sustained throttling with CPU use below the limit means the thread count is wrong, not that the pod needs more cores.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.1
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.25
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 18
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))\n/\nsum by (pod) (rate(container_cpu_cfs_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "CPU throttling",
+          "type": "timeseries",
+          "id": 6
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Working set is what the kernel OOM-kills on. Request equals limit on every matchcore tier, so the two dashed lines overlap; a gap means a tier was retuned and SIZING.md is behind.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "bytes"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 27
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "container_memory_working_set_bytes{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}",
+              "legendFormat": "{{ `{{` }} pod }}",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"memory\"})",
+              "legendFormat": "{{ `{{` }} pod }} request",
+              "range": true,
+              "refId": "B"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"memory\"})",
+              "legendFormat": "{{ `{{` }} pod }} limit",
+              "range": true,
+              "refId": "C"
+            }
+          ],
+          "title": "Memory: working set vs request vs limit",
+          "type": "timeseries",
+          "id": 7
+        },
+        {
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 36
+          },
+          "panels": [],
+          "title": "I/O",
+          "type": "row",
+          "id": 8
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Read and write operations per second against the node's disk. The proxy encode writes into the tmpStorage emptyDir, which is node disk, so a tier starved here shows low CPU and no throttling while wall time climbs.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "iops"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 37
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_fs_reads_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} read",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_fs_writes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} write",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "Disk IOPS",
+          "type": "timeseries",
+          "id": 9
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Bytes per second to and from node disk, the same I/O as the IOPS panel measured by volume. Large sequential proxy writes and small scattered reads look identical in IOPS and very different here.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "Bps"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 37
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_fs_reads_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} read",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_fs_writes_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} write",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "Disk throughput",
+          "type": "timeseries",
+          "id": 10
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Source media is streamed from a presigned S3 URL and never lands on disk, so for most tiers this is the real input rate. A job flat here with CPU well under its limit is waiting on the network, not short of cores.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "Bps"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 46
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_network_receive_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} rx",
+              "range": true,
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "sum by (pod) (rate(container_network_transmit_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\"}[$__rate_interval]))",
+              "legendFormat": "{{ `{{` }} pod }} tx",
+              "range": true,
+              "refId": "B"
+            }
+          ],
+          "title": "Network throughput",
+          "type": "timeseries",
+          "id": 11
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Fraction of wall time each node's disk was busy. Cluster-wide, not scoped to the tier variable: a matchcore job can be slow because something else on its node saturated the disk, and that is invisible from the pod's own counters. Sustained values near 1 mean the device is the limit.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "lineWidth": 1,
+                "showPoints": "never",
+                "axisPlacement": "auto",
+                "scaleDistribution": {
+                  "type": "linear"
+                }
+              },
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.9
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*(request|limit).*"
+                },
+                "properties": [
+                  {
+                    "id": "custom.lineStyle",
+                    "value": {
+                      "dash": [
+                        10,
+                        10
+                      ],
+                      "fill": "dash"
+                    }
+                  },
+                  {
+                    "id": "custom.lineWidth",
+                    "value": 2
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 46
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ],
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "expr": "rate(node_disk_io_time_seconds_total{device!~\"dm-.*\"}[$__rate_interval])",
+              "legendFormat": "{{ `{{` }} instance }} {{ `{{` }} device }}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Node disk utilisation",
+          "type": "timeseries",
+          "id": 12
+        },
+        {
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 55
+          },
+          "panels": [],
+          "title": "Failures",
+          "type": "row",
+          "id": 13
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Tier pods killed for exceeding their memory limit. Uses terminated_reason, NOT last_terminated_reason: scaledJob pods are restartPolicy Never, so they never restart and last_terminated_reason has no series for them at all - an OOM would be invisible. A row here means the tier's memory envelope is too small for that source. Peak memory equal to the limit means the measurement was ceiling-bound and the real demand is unknown.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 56
+          },
+          "options": {
+            "showHeader": true
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "instant": true,
+              "expr": "max_over_time(kube_pod_container_status_terminated_reason{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", reason=\"OOMKilled\"}[$__range]) > 0",
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true,
+                  "endpoint": true,
+                  "instance": true,
+                  "job": true,
+                  "service": true,
+                  "uid": true
+                },
+                "indexByName": {}
+              }
+            }
+          ],
+          "title": "OOM kills",
+          "type": "table",
+          "id": 14
+        }
+      ],
+      "preload": false,
+      "refresh": "30s",
+      "schemaVersion": 42,
+      "tags": [
+        "matchcore"
+      ],
+      "templating": {
+        "list": [
+          {
+                "current": {},
+                "description": "Postgres datasource holding the platform database; the job tables read good_jobs through it.",
+                "hide": 0,
+                "includeAll": false,
+                "label": "Database",
+                "multi": false,
+                "name": "pgds",
+                "options": [],
+                "query": "grafana-postgresql-datasource",
+                "refresh": 1,
+                "regex": "",
+                "type": "datasource"
+              },
+          {
+                "current": {
+                  "text": [
+                    "$__all"
+                  ],
+                  "value": [
+                    "$__all"
+                  ]
+                },
+                "description": "matchcore scaledJob tiers, rendered from the chart's own scaledJobs keys.",
+                "includeAll": true,
+                "label": "Tier",
+                "multi": true,
+                "name": "tier",
+                "options": [],
+                "query": "{{ $tiers | join "," }}",
+                "type": "custom"
+              }
+        ]
+      },
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "MatchCore Job Tiers",
+      "uid": "matchcore-tiers",
+      "version": 1
+    }
+{{- end }}
+{{- end }}

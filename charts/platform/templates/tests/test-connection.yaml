@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "platform.fullname" . }}-test-connection"
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      # /up is the Rails health endpoint the web liveness and readiness probes
+      # already use. This previously requested /, which the app does not serve a
+      # 200 for, so wget exited non-zero and the test could only ever fail —
+      # invisible until sc-24424 ran `helm test` for the first time.
+      command: ['wget']
+      args:
+        - '-q'
+        - '-O-'
+        - '{{ include "platform.fullname" . }}:{{ .Values.service.port }}/up'
+  restartPolicy: Never

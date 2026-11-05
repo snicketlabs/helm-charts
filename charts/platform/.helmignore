@@ -1,0 +1,35 @@
+# Patterns to ignore when building packages.
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+.DS_Store
+# Common VCS dirs
+.git/
+.gitignore
+.bzr/
+.bzrignore
+.hg/
+.hgignore
+.svn/
+# Common backup files
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Various IDEs
+.project
+.idea/
+*.tmproj
+.vscode/
+# Internal Development Files and tools
+internal/
+# Working instructions for this repo: ticket refs, release process, repo
+# conventions. Was shipping inside the chart package until now.
+CLAUDE.md
+# helm-docs template — source only, not part of the chart package
+README-generated.md.gotmpl
+docs/
+Makefile
+.github/
+.githooks/
+.claude/

@@ -1,0 +1,54 @@
+{{/*
+Database preparation on upgrades (pre-upgrade hook) and under ArgoCD (PostSync
+hook): migrations, seeds and the KEDA role, in that order
+(platform.dbPrepareCommand). Fresh Helm installs use db-prepare-initial.yaml.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rails-prepare-job-{{ include "platform.hookJobSuffix" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-prepare
+  annotations:
+    {{- with .Values.dbPrepareJob.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- toYaml .Values.dbPrepareJob.helmHookAnnotations | nindent 4 }}
+spec:
+  ttlSecondsAfterFinished: 86400 # 24 hours — Kubernetes cleans up without Helm deletion watch
+  backoffLimit: {{ .Values.dbPrepareJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-prepare
+    spec:
+      serviceAccountName: {{ include "platform.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: Never
+      containers:
+        - name: rails-db-prepare
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          args:
+            {{- include "platform.dbPrepareCommand" . | nindent 12 }}
+          env:
+           {{- include "platform.envVars" . | nindent 12 }}
+           {{- include "platform.owningUserEnvVars" . | nindent 12 }}
+           {{- include "platform.kedaPostgresRoleEnv" . | nindent 12 }}
+          volumeMounts:
+           {{- include "platform.volumeMounts" . | nindent 12 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "platform.volumes" . | nindent 8 }}

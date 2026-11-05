@@ -1,0 +1,177 @@
+# OneAndDone
+{{- range $name, $job := .Values.scaledJobs }}
+{{- if $job.enabled }}
+{{- /* The key becomes a Kubernetes object name, so it must be RFC 1123. helm
+       template and helm lint both render an invalid name without complaint —
+       only the API server rejects it, half way through an upgrade. */}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name) }}
+{{- fail (printf "scaledJobs key %q is not a valid Kubernetes name: lowercase alphanumerics and '-' only, starting and ending alphanumeric" $name) }}
+{{- end }}
+{{- include "platform.rejectRenamedKeys" (dict "kind" "scaledJobs" "name" $name "values" $job) }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: {{ $name }}-{{ include "platform.fullname" $ }}
+spec:
+  jobTargetRef:
+    {{- if $job.activeDeadlineSeconds }}
+    activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
+    {{- end }}
+    # we just leave it up to KEDA to launch a new pod if if still finds jobs on the queue
+    backoffLimit: 0
+    template:
+      metadata:
+        labels:
+          app.ad-signal.io/type: "job"
+          app.ad-signal.io/job-name: {{ $name }}
+          {{- include "platform.labels" $ | nindent 10 }}
+        annotations:
+          # Ask karpenter to not voluntarily disrupt this pod
+          # involuntary disruptions, such as SPOT instance replacements are still possible.
+          karpenter.sh/do-not-disrupt: "true"
+      spec:
+        terminationGracePeriodSeconds: {{ add $.Values.goodJob.shutdownTimeout $.Values.goodJob.shutdownGraceSeconds }}
+        serviceAccountName: {{ include "platform.serviceAccountName" $ }}
+        restartPolicy: Never
+        {{- with $.Values.podSecurityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with $job.affinity }}
+        affinity:
+          nodeAffinity:
+          {{- toYaml $job.affinity.nodeAffinity | nindent 12 }}
+        {{- end }}
+        {{- with $job.tolerations }}
+        tolerations:
+          {{- toYaml $job.tolerations | nindent 10 }}
+        {{- end }}
+        {{- with $.Values.imagePullSecrets }}
+        imagePullSecrets:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        containers:
+          - name: good-job
+            image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+            imagePullPolicy: {{ $.Values.image.pullPolicy }}
+            {{- with $.Values.securityContext }}
+            securityContext:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+            args:
+              - /app/bin/bundle
+              - exec
+              - rails
+              - "good_job:perform_inline_task[{{ $job.queue }}]"
+            lifecycle:
+              preStop:
+                exec:
+                  command:
+                    - "/prestop.sh"
+            livenessProbe:
+              exec:
+                command:
+                  - cat
+                  - /tmp/liveness
+              initialDelaySeconds: 60
+              periodSeconds: 10
+            volumeMounts:
+              {{- include "platform.volumeMounts" $ | nindent 14 }}
+              {{- if $job.preStopProcToKill }}
+              - name: prestop-kill-script
+                mountPath: "/prestop.sh"
+                subPath: prestop.sh
+                readOnly: true
+              {{- end }}
+            env:
+              {{- include "platform.envVars" $ | nindent 14 }}
+              {{- if $job.matchcoreThreads }}
+              # Must not exceed this job's CPU limit in cores; the limit may sit
+              # above it, since ffmpeg shares the threads (see values.yaml,
+              # sc-24736). matchcore picking its own thread count from the
+              # node's cores runs it past the codec's ceiling — VC-3/DNxHD
+              # measured 35% slower at 16 threads than at 4.
+              - name: MATCHCORE_THREADS
+                value: "{{ $job.matchcoreThreads }}"
+              {{- end }}
+              {{- if $job.imageSequence }}
+              {{- /* INTERIM, and per job rather than release-wide because only
+                     TIFF sequences read these - every other source is fetched
+                     by matchcore itself and never touches the Ruby feeder. See
+                     the note on the tiff-sequence-matchcore tier in values.yaml. */ -}}
+              {{- if $job.imageSequence.downloadThreads }}
+              - name: IMAGE_SEQUENCE_DOWNLOAD_THREADS
+                value: "{{ $job.imageSequence.downloadThreads }}"
+              {{- end }}
+              {{- if $job.imageSequence.bufferMegabytes }}
+              - name: IMAGE_SEQUENCE_BUFFER_MEGABYTES
+                value: "{{ $job.imageSequence.bufferMegabytes }}"
+              {{- end }}
+              {{- end }}
+              {{- if $job.preStopProcToKill }}
+              - name: PRESTOP_PROC_TO_KILL
+                value: "{{ $job.preStopProcToKill }}"
+              {{- end }}
+              - name: GOOD_JOB_QUEUES
+                value: {{ $job.queue | quote }}
+              - name: GOOD_JOB_MAX_THREADS
+                value: "1"
+              - name: GOOD_JOB_SHUTDOWN_TIMEOUT
+                value: {{ $.Values.goodJob.shutdownTimeout | quote }}
+              - name: GOOD_JOB_POLL_INTERVAL
+                value: {{ $.Values.goodJob.pollInterval | quote }}
+              - name: GOOD_JOB_PROBE_PORT
+                value: {{ $.Values.goodJob.probePort | quote }}
+              - name: DB_QUEUE_POOL_SIZE
+                value: "2"
+            ports:
+              - name: metrics
+                containerPort: {{ $.Values.metrics.metricsPort }}
+            {{- with $job.resources }}
+            resources:
+                {{- toYaml . | nindent 14 }}
+            {{- end }}
+        volumes:
+          {{- include "platform.volumes" $ | nindent 10 }}
+          {{- if $job.preStopProcToKill }}
+          - name: prestop-kill-script
+            configMap:
+              name: prestop-kill-script
+              defaultMode: 0555
+          {{- end }}
+  successfulJobsHistoryLimit: 15
+  failedJobsHistoryLimit: 5
+  rollout:
+    # Don't terminate existing running jobs when ScaledObject is updated
+    strategy: gradual
+  scalingStrategy:
+    strategy: "accurate"
+    pendingPodConditions:
+      - "Ready"
+      - "PodScheduled"
+  maxReplicaCount:  {{ $job.maxReplicaCount }}
+  pollingInterval:  {{ $.Values.kedaAutoScaling.postgres.pollingInterval | default 30 }}
+  triggers:
+    - type: postgresql
+      authenticationRef:
+        name: {{ $.Values.kedaAutoScaling.postgres.authenticationRef.name }}
+      metadata:
+        host: {{ include "platform.kedaPostgresHost" $ }}
+        port: "{{ $.Values.kedaAutoScaling.postgres.port | default 5432 }}"
+        dbName: {{ $.Values.kedaAutoScaling.postgres.dbName | default $.Values.postgres.auth.database }}
+        userName: {{ $.Values.kedaAutoScaling.postgres.dbUser | default $.Values.kedaAutoScaling.postgres.roleName | default "db_keda_ro" }}
+        sslmode: {{ $.Values.kedaAutoScaling.postgres.sslmode | default "require" }}
+        query: >-
+          SELECT COUNT(1)
+          FROM good_jobs
+          WHERE finished_at IS NULL
+            AND scheduled_at < NOW()
+            AND queue_name = '{{ $job.queue }}'
+            AND (locked_by_id IS NULL OR NOT EXISTS (
+              SELECT 1 FROM good_job_processes p
+              WHERE p.id = good_jobs.locked_by_id
+                AND p.updated_at > NOW() - INTERVAL '90 seconds'))
+        targetQueryValue: "1"
+{{- end }}
+{{- end }}
