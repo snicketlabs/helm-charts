@@ -1,0 +1,26 @@
+{{- if .Values.gke.enabled -}}
+{{- /*
+GKE-specific. The GKE Gateway controller defaults the backend health
+check to "/" on the serving port; the app 302-redirects "/", so GKE marks the
+backend UNHEALTHY (503). This HealthCheckPolicy points the check at the app's
+health endpoint (/up, returns 200). Only needed on GKE Gateway clusters — gated
+on gke.enabled so it never renders elsewhere (the CRD is GKE-only).
+*/}}
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-web
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        requestPath: {{ .Values.gke.healthCheckPath | default "/up" | quote }}
+        port: {{ .Values.service.port }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ include "platform.fullname" . }}
+{{- end }}

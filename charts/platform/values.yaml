@@ -1,0 +1,983 @@
+# @doc-title: Platform Helm Values Reference
+# @doc-folder: Technical Documentation
+# @doc-status: 2
+#
+# SMTP configuration
+smtp:
+  enabled: false
+  # Secret containing SMTP credentials used by the application.
+  # The referenced Kubernetes Secret must exist and include the following keys:
+  # - SMTP_ADDRESS: SMTP server hostname (e.g. "smtp.example.com")
+  # - SMTP_DOMAIN: HELO/EHLO domain to use (e.g. "example.com")
+  # - SMTP_PORT: SMTP server port (e.g. "587")
+  # - SMTP_USER_NAME: Username for SMTP authentication (Using AWS SES this will be the AWS Access Key ID for the smtp user)
+  # - SMTP_PASSWORD: Password for SMTP authentication (Using AWS SES this will be AWS Secret Access Key for the smtp user)
+  # - MAILER_DEFAULT_FROM: Default "from" email address (e.g. "no-reply@example.com")
+  #
+  # Example: create the secret with kubectl
+  # kubectl create secret generic smtp-secrets \
+  #   --from-literal=SMTP_ADDRESS=smtp.example.com \
+  #   --from-literal=SMTP_DOMAIN=example.com \
+  #   --from-literal=SMTP_PORT=587 \
+  #   --from-literal=SMTP_USER_NAME='AKIABLAHBLAHBLAH' \
+  #   --from-literal=SMTP_PASSWORD='awssecretaccesskeyhere' \
+  #   --from-literal=MAILER_DEFAULT_FROM="no-reply@example.com"
+  secret:
+    name: smtp-secrets
+
+# Honeybadger error tracking configuration (optional)
+# Off while environment is empty. Set environment to the name provided by
+# Ad-Signal to turn it on; the API key is then read from a Kubernetes secret,
+# which must exist before any pod starts.
+#
+# Example: create the secret with kubectl
+# kubectl create secret generic honeybadger-api-key \
+#   --namespace snicketlabs \
+#   --from-literal=apiKey=YOUR_HONEYBADGER_API_KEY
+honeybadger:
+  secretName: honeybadger-api-key
+  secretKey: apiKey
+  environment: "" # Set to enable. Your Honeybadger environment name (provided by Ad-Signal)
+
+owningUser:
+  # You may create a Kubernetes secret with the owning user's credentials.
+  # Set secret.generate: true to auto-generate password (requires Kubernetes cluster access)
+  # Set secret.generate: false to use a pre-created secret
+  # Example: create the secret with kubectl
+  # kubectl create secret generic owning-user-credentials \
+  #   --namespace snicketlabs \
+  #   --from-literal=password="SecurePassword123!"
+  email: "admin@example.invalid"
+  firstName: "Admin"
+  lastName: "User"
+  # It's not recommended to set a static password here
+  #password: "notsecure"
+  organisationName: "Example Org"
+  secret:
+    generate: false # Set to true to allow Helm to generate the secret
+    name: owning-user-credentials # Kubernetes secret containing the owning user's credentials
+
+
+# GoodJob settings. Background jobs run on GoodJob, backed by the application's
+# Postgres database; the app image must be a GoodJob release.
+# Long-running workers take their thread count and drain time from each worker's
+# concurrency / shutdownTimeout.
+# scaledJob task pods drain for shutdownTimeout and get
+# terminationGracePeriodSeconds = shutdownTimeout + shutdownGraceSeconds.
+goodJob:
+  pollInterval: 5 # seconds between GoodJob queue polls (GOOD_JOB_POLL_INTERVAL)
+  probePort: 7001 # GOOD_JOB_PROBE_PORT; serves the worker startup/liveness probes
+  shutdownTimeout: 600 # seconds a scaledJob task pod lets its job finish after SIGTERM (GOOD_JOB_SHUTDOWN_TIMEOUT). A task still running after this is interrupted and retried, and counts towards its retry limit, so cover your longest tasks
+  shutdownGraceSeconds: 60 # headroom added to the drain time to get terminationGracePeriodSeconds (workers and scaledJobs)
+
+# KEDA is a hard prerequisite of this chart — see docs/README.md. There is no
+# static-worker fallback; every worker is a ScaledObject or ScaledJob.
+kedaAutoScaling:
+  # KEDA scales on the good_jobs table directly, mirroring the pattern proven in
+  # the Hub SaaS chart (helm-charts-sas PR #755).
+  postgres:
+    pollingInterval: 30 # seconds
+    sslmode: require
+    # Host is resolved automatically for the bundled postgres subchart or
+    # postgres.primaryHost. Set this explicitly if you use
+    # postgres.dbPrimaryHostSecret instead — KEDA needs a literal host string
+    # at render time, it can't pull one from a Secret the way env vars can.
+    host: ""
+    port: 5432
+    # When true (default), a Job creates/converges a dedicated read-only Postgres
+    # role (roleName) with SELECT on good_jobs only — not pg_read_all_data — and
+    # never fails the install/upgrade if the DB user lacks CREATEROLE (common for
+    # BYOP/onprem). See docs/README.md "Manual KEDA role setup" for the fallback
+    # if your Postgres can't grant that automatically.
+    autoCreateRole: true
+    roleName: db_keda_ro
+    dbUser: "" # defaults to roleName if unset — leave unset unless you're using autoCreateRole: false with your own pre-existing role under a different name
+    dbName: "" # defaults to postgres.auth.database if unset
+    authenticationRef:
+      name: keda-trigger-auth-postgres
+      # Defaults to a generated Secret name (see platform.kedaPostgresRoleSecretName)
+      # holding the auto-created role's password. Override only if autoCreateRole
+      # is false and you're supplying your own pre-existing Secret.
+      secretName: ""
+      secretKey: "password"
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  repository: registry.snicketlabs.io/snicketlabs/platform
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Image tag for the platform app. Defaults to .Chart.AppVersion if not set — override here
+  # to pin to a specific release independently of the chart version.
+  tag: ""
+
+dbPrepareJob:
+  annotations: {}
+  # Retries for both database preparation Jobs (install and upgrade). Enough
+  # for a brief database hiccup; a real failure (a broken migration, a missing
+  # GoodJob table) marks the Job failed after this many retries, about a minute,
+  # instead of Kubernetes' default 6, which with its backoff takes around 15.
+  backoffLimit: 2
+  helmHookAnnotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    # Empty delete policy: job names include {{ .Release.Revision }} so there is no
+    # "already exists" conflict between upgrades — no cleanup needed. Empty avoids
+    # before-hook-creation, which causes Helm v4 StatusWatcherStrategy to block ~5 min
+    # waiting for a DELETED event on a resource that doesn't exist yet (fresh install).
+    # Jobs accumulate across revisions but are harmless.
+    "helm.sh/hook-delete-policy": ""
+
+duration_async_required: "300"
+rails_env: production
+logLevel: info
+log_path_mode: "0664"
+log_path: /app/log/production.log
+
+# Secret Keys configuration
+# Used for Rails session encryption, API authentication, and other cryptographic operations
+secretKeys:
+  # The application requires three secret keys: apiSecretKeyBase, secretKeyBase, and ingestCredentialEncryptionKey.
+  # These can be provided via a Kubernetes secret.
+  # Set generate: true to auto-generate these keys (requires Kubernetes cluster access)
+  # Set generate: false to use a pre-created secret
+  # If you have an existing secret from a previous install, specify it here:
+  # Example: create the secret with kubectl
+  # kubectl create secret generic api-secrets \
+  #   --from-literal=api_secret_key_base=YOUR_API_SECRET_KEY_BASE \
+  #   --from-literal=secret_key_base=YOUR_SECRET_KEY_BASE \
+  #   --from-literal=ingest_credential_encryption_key=YOUR_INGEST_CREDENTIAL_ENCRYPTION_KEY
+  secret:
+    generate: false
+    name: api-secrets
+
+storage:
+  # Scratch space for ingest and processing. matchcore streams its source from a
+  # presigned URL and writes here, per pod.
+  #
+  # This is an emptyDir volume mounted at /tmp.
+  # Container entrypoint script creates a directory at `tmpStorage.path` with required permissions
+  tmpStorage:
+    enabled: true
+    path: /tmp/app_tmp # Must exist in /tmp.  Created by the entrypoint with the AP_SIGNAL_TMPDIR variable
+    # Optional limit on the whole emptyDir. Sources are streamed, not staged here, so this does not
+    # need to scale with content size; per-job ephemeral-storage on the matchcore tiers is the
+    # better control. Do not disable tmpStorage: the root filesystem is read-only.
+    #sizeLimit: 20Gi
+
+# Any additional file systems that contain content, or secrets required by the application may be mounted here
+# These are mounted on all pods, so PVCs must be ReadOnlyMany
+volumes: []
+  #- name: content-location
+  #  persistentVolumeClaim:
+  #    claimName: "content-pvc" # A PVC on the cluster that contains content to be processed by the application.
+  #- name: example-password
+  #  secret:
+  #    secretName: "example-password"
+volumeMounts: []
+  #- name: content-location
+  #  mountPath: "/content
+  #- name: example-password
+  #  readOnly: true
+  #  mountPath: "/etc/example-password"
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# This is to override the chart name.
+nameOverride: "platform"
+fullnameOverride: "platform"
+
+extraEnvs: []
+  #- name: CUSTOMER_ENV
+  #  value: "testing-1"
+extraEnvSecrets: []
+  # - name: MY_SECRET_ENV
+  #   secretName: my-k8s-secret
+  #   secretKey: my-key
+
+contentSecrets: []
+  #- name: content-bucket
+  #  env_prefix: CONTENT
+  #  secret:
+  #    name: content-bucket-creds
+  #    key_id: access_key_id # sets CONTENT_ACCESS_KEY_ID
+  #    secret_access_key: secret_access_key # sets CONTENT_SECRET_ACCESS_KEY
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsUser: 65532 # nonroot (65532) is a standard convention for "distroless" and hardened images
+  fsGroup: 65532
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsUser: 65532
+
+metrics:
+  enabled: true
+  metricsPort: 9090
+
+webServers:
+  port: 3000
+  replicas: 1
+  livenessProbe:
+    timeoutSeconds: 5
+  readinessProbe:
+    timeoutSeconds: 5
+  # Sets RAILS_MAX_THREADS — controls Puma thread count and ActiveRecord connection pool size.
+  railsMaxThreads: 15
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      memory: 1536Mi
+
+railsConsole:
+  enabled: false
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# ScaledObjects: KEDA-managed long-running workers with HorizontalPodAutoscaler-like behavior
+# Use for multi-queue workers that benefit from dynamic scaling based on queue depth
+# Each worker can consume multiple queues and will scale between min/max replicas
+#
+# NOTE: These are base/default configurations. Environment-specific files in environment-sizes/
+# override ONLY the maxReplicaCount values using Helm's deep merge. All other settings
+# (resources, queues, timeouts, etc.) remain as defined here unless explicitly overridden.
+scaledObjects:
+  generic:
+    minReplicaCount: 1
+    maxReplicaCount: 3
+    concurrency: 10
+    dbPoolSize: 10
+    dbFollowerPoolSize: 10
+    shutdownTimeout: 30
+    resources:
+      limits:
+        cpu: 300m
+        memory: 1500Mi
+      requests:
+        cpu: 300m
+        memory: 300Mi
+    queues:
+      - name: default
+        priority: 1
+      - name: pipeline
+        priority: 2
+      - name: mailers
+        priority: 3
+      - name: active_storage_purge
+        priority: 4
+      - name: refresh_ingest_source_reports
+        priority: 5
+
+# ScaledJobs: KEDA-managed ephemeral job pods with "one and done" pattern
+# Use for CPU-intensive or long-running tasks that benefit from dedicated pod-per-job scaling
+# Each scaledJob processes ONE queue only (limitation: cannot handle multiple queues)
+# Jobs are created on-demand when queue has items and terminated after completion
+# Each job pod runs exactly one task (GoodJob concurrency 1)
+#
+# NOTE: These are base/default configurations. Environment-specific files in environment-sizes/
+# override ONLY the maxReplicaCount values using Helm's deep merge. All other settings
+# (resources, queues, timeouts, etc.) remain as defined here unless explicitly overridden.
+#
+# IMPORTANT — write every cpu/memory quantity in its CANONICAL form.
+#
+# KEDA's operator adds its finalizer with a full-object PUT, which re-serialises
+# the pod template through resource.Quantity. Any quantity whose canonical
+# spelling differs from what you wrote gets rewritten on the stored object
+# ("2000m" -> "2", "0.75" -> "750m", "2048Mi" -> "2Gi", "1.5Gi" -> "1536Mi").
+# That rewrite hands server-side-apply ownership of the field to KEDA, and every
+# later Helm upgrade then fails with "conflict with manager keda". See the
+# "Upgrades and field conflicts" section of the chart documentation.
+#
+# Rules: no trailing "000" on cpu millis, no decimal points, and use the largest
+# binary suffix that divides exactly. Quote bare integers so they stay strings.
+# Pick a value that is a whole number of bytes — 0.8Gi is not, and canonicalises
+# to the unreadable 858993459200m, so write 820Mi instead.
+#
+# values.schema.json enforces what a pattern can express: decimals, bare YAML
+# numbers and whole-core millicores. It cannot express divisibility, so 4096Mi
+# passes validation and is still rewritten to 4Gi. If an upgrade fails with
+# "conflict with manager keda", that is the cause — see docs/README.md
+# "Upgrades and field conflicts" for the --force-conflicts remedy.
+scaledJobs:
+  # --- matchcore fingerprinting -------------------------------------------------
+  #
+  # These jobs run a single Ruby container from the main image; the Ruby code
+  # shells out to the matchcore `match` CLI and persists the result.
+  #
+  # UNPROVEN: these figures are a starting position and have not been
+  # confirmed against a real workload.
+  #
+  # Tiers are named for the content hub routes to them (<content>-matchcore,
+  # queue <content>_matchcore), not for their size, so a tier can be resized
+  # without renaming its queue in hub and the chart in lockstep. The sizing
+  # lives in the values below and in internal/SIZING.md, never in the name.
+  # Keep the -matchcore suffix: the matchcore-tiers dashboard finds tiers by it.
+  #
+  # matchcoreThreads must not exceed the CPU limit, and the
+  # limit may need to sit above it: MATCHCORE_THREADS goes to both `match` and
+  # the proxy ffmpeg, so a pod can use more cores than threads (interlaced VC-3
+  # peaks at ~1.6x threads, sc-24736). Raise the request with the limit - the
+  # request picks the node, and a limit above the node's cores does nothing.
+  # Memory keeps request == limit: eviction mid-decode loses the material.
+  # ephemeral-storage reserves and caps the /tmp scratch the proxy is encoded
+  # into (measured worst case about 1GB at 640x360 fps=20); without it the
+  # tmpStorage emptyDir is unmetered node disk. See internal/SIZING.md.
+  dv-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "4"
+        memory: 2Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 4
+    queue: dv_matchcore
+    activeDeadlineSeconds: 7200
+  # VC-3 and DVCPRO HD 1080i; other DV stays on dv-matchcore. The proxy ffmpeg
+  # deinterlaces these (bwdif), so at 4 threads the pod needs ~6.3 cores.
+  # Measured on matchcore-mvp,
+  # 2026-10-13, one 42 min interlaced VC-3 1080 source (sc-24736):
+  #
+  #   request 2 / limit 4  29.6 min  avg 3.57  peak 4.00  throttled 91%
+  #   request 2 / limit 6  19.9 min  avg 5.08  peak 5.97  throttled 60%
+  #   request 6 / limit 8  19.9 min  avg 5.67  peak 6.31  throttled  0%
+  #   memory 697-721MiB in every run
+  #
+  # Request 6 rather than 2 because Karpenter places on requests: at request 2
+  # a limit-8 pod landed on a c6a.xlarge (3.77 allocatable cores) and the limit
+  # did nothing. Threads stay at 4, VC-3's best in the codec sweep.
+  interlaced-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "6"
+        memory: 2Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "8"
+        memory: 2Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 4
+    queue: interlaced_matchcore
+    activeDeadlineSeconds: 7200
+  hd-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "5"
+        memory: 3Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "8"
+        memory: 3Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 8
+    queue: hd_matchcore
+    activeDeadlineSeconds: 7200
+  uhd-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "6"
+        memory: 4Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "8"
+        memory: 4Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 8
+    queue: uhd_matchcore
+    activeDeadlineSeconds: 28800
+  # Image sequences (TIFF). hub downloads these itself through
+  # ImageSequenceFeeder; every other source is fetched by matchcore from a
+  # presigned URL, which is why the imageSequence settings live only here.
+  #
+  # Sized from measurements on matchcore-mvp, 2026-10-13, with hub #2939
+  # deployed, fingerprinting MPG_101_TIFFs_V1 (57,668 frames, 47.5MiB each,
+  # 2.67TiB) from hub-incoming-apple-poc:
+  #
+  #   ruby (feeder)  1.02 cores    match  1.66 cores    ffmpeg  0.38 cores
+  #   total          3.06 of 8     memory 2.62GiB of 4GiB    download 243 MB/s
+  #
+  # The request is 4 because the work is 3.06 cores and the feeder cannot use
+  # more: it is bound by one Ruby process. Measured in isolation against the
+  # real ImageSequenceFeeder, the ceiling is flat in both of the settings below:
+  #
+  #   threads  8, buffer  640MiB -> 282 MB/s  1.06 cores  RSS 1085MB
+  #   threads 16, buffer  640MiB -> 297 MB/s  1.08 cores  RSS 1589MB
+  #   threads 32, buffer  640MiB -> 281 MB/s  1.08 cores  RSS 2453MB
+  #   threads 16, buffer 1536MiB -> 292 MB/s  1.08 cores  RSS 2008MB
+  #
+  # So 8 threads is kept: 16 buys 5% for 46% more memory and 32 buys nothing.
+  # bufferMegabytes stays explicit at 640 rather than taking #2939's 768
+  # default, because the sweep shows the larger buffer does not raise
+  # throughput and 640 is what the 2.62GiB measurement above was taken at.
+  #
+  # The CPU limit stays at 8 against a request of 4: `match` is the component
+  # that scales with throughput, and leaving it burst headroom costs nothing
+  # while the feeder is the constraint.
+  #
+  # This tier will want resizing, not replacing, once the feeder downloads in
+  # parallel across processes (sc-24738). At that point the feeder stops being
+  # the cap, `match` becomes it, and the envelope grows towards 8 cores and
+  # 8Gi. Keep the queue name; change the numbers.
+  tiff-sequence-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "4"
+        memory: 4Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "8"
+        memory: 4Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 8
+    queue: tiff_sequence_matchcore
+    # 2.67TiB at 243 MB/s is about 3.3 hours; 8h leaves room for a slower
+    # sequence without masking a stall, which the feeder watchdog catches.
+    activeDeadlineSeconds: 28800
+    imageSequence:
+      downloadThreads: 8
+      bufferMegabytes: 640
+  # JPEG 2000 tiers. request == limit on CPU as well: J2K used 97-99% of its
+  # thread cap in every run, so there is no idle share for a limit to lend.
+  # Memory is threads x frame size (45MB/thread at 1080p, 300MB/thread at 4K).
+  # See internal/SIZING.md, "JPEG 2000 tiers".
+  j2k-hd-matchcore:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        cpu: "8"
+        memory: 2Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "8"
+        memory: 2Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 8
+    queue: j2k_hd_matchcore
+    activeDeadlineSeconds: 14400
+  j2k-uhd-matchcore:
+    enabled: true
+    # 1 until the first real 4K J2K job confirms the interpolated 12-thread
+    # wall time and proxy share.
+    maxReplicaCount: 1
+    resources:
+      requests:
+        cpu: "12"
+        memory: 6Gi
+        ephemeral-storage: 1Gi
+      limits:
+        cpu: "12"
+        memory: 6Gi
+        ephemeral-storage: 4Gi
+    matchcoreThreads: 12
+    queue: j2k_uhd_matchcore
+    activeDeadlineSeconds: 43200
+  # Ingest worker queues converted to scaledJobs (CPU halved from 1 to 0.5 due to concurrency 2->1)
+  ingest-proxy-generate:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 1280Mi
+        cpu: "2"
+      limits:
+        cpu: "6"
+        memory: 4Gi
+    queue: proxy_generate_tasks
+    activeDeadlineSeconds: 5400 # set to 90mins
+  ingest-attach-image:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "500m"
+      limits:
+        cpu: "500m"
+        memory: 820Mi
+    queue: video_match_frames_attach_image_tasks
+    activeDeadlineSeconds: 600
+  ingest-process-materials:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "500m"
+      limits:
+        cpu: "500m"
+        memory: 820Mi
+    queue: process_materials
+    activeDeadlineSeconds: 600
+  ingest-materials:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "500m"
+      limits:
+        cpu: "500m"
+        memory: 820Mi
+    queue: ingest_materials
+    activeDeadlineSeconds: 600
+  ingest-process-qc:
+    enabled: true
+    maxReplicaCount: 2
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "2"
+      limits:
+        cpu: "4"
+        memory: 3Gi
+    queue: process_qc
+    activeDeadlineSeconds: 3600
+  ingest-process-media:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "500m"
+      limits:
+        cpu: "500m"
+        memory: 820Mi
+    queue: process_media
+    activeDeadlineSeconds: 600
+  ingest-download-media:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 820Mi
+        cpu: "500m"
+      limits:
+        cpu: "500m"
+        memory: 820Mi
+    queue: download_media
+    activeDeadlineSeconds: 5400 # set to 90mins
+  # Audiomatchfingerprint worker queue converted to scaledJob (concurrency 1, resources unchanged)
+  audiomatch-fingerprint:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 5500Mi # p95 over 7d (was 6Gi == limit)
+        cpu: "1" # p95 over 7d (was 1.5 == limit)
+      limits:
+        cpu: "1500m"
+        memory: 8Gi # raised from 6Gi; peak was 5.88 GiB (98% of old limit), OOMKills likely
+    queue: audio_match_frames_fingerprint_tasks
+    activeDeadlineSeconds: 28800 # set to 8h; audio files up to 180min, 2x buffer for processing time
+  # Compare worker queue converted to scaledJob (concurrency 1).
+  # Sized for long-form. Memory scales with the duration of the two assets being
+  # compared, not with how many candidates are shortlisted; tested against a pair
+  # of 180-minute assets (~1.9M audio fingerprints), which peaks a little over
+  # 1 GiB. More than one core because the alignment itself is multithreaded.
+  # The CPU request is well below the limit on purpose: the work is bursty, so
+  # reserving the full limit per replica makes the cluster provision nodes that
+  # then sit idle. Memory keeps request == limit, because being evicted part-way
+  # through an alignment loses the material.
+  compare-relate:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 3Gi
+        cpu: "500m"
+      limits:
+        cpu: "2"
+        memory: 3Gi
+    queue: relate_materials
+    activeDeadlineSeconds: 14400 # backstop for a hung process; a 180-min pair completes in ~45s
+  # Process worker queues converted to scaledJobs (CPU halved from 1.5 to 0.75 due to concurrency 2->1)
+  process-complete-materials:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: complete_materials
+    activeDeadlineSeconds: 600
+  process-compare-results:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: compare_materials_results
+    activeDeadlineSeconds: 600
+  process-audio-insights:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: audio_insights
+    activeDeadlineSeconds: 600
+  process-ai-tagging:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: ai_tagging
+    activeDeadlineSeconds: 600
+  process-unique-frames-groups:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: video_unique_frames_create_groups_tasks
+    activeDeadlineSeconds: 600
+  process-unique-frames-create:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: video_unique_frames_create_tasks
+    activeDeadlineSeconds: 600
+  # This queue runs the shortlist step, which searches the whole organisation for
+  # comparison candidates before fanning work out. Its cost therefore scales with
+  # how much material the organisation holds, not with the size of the material
+  # being processed, so the time budget has to allow for a large catalogue. At 600s
+  # it was killed part-way through on a catalogue of 41 comparable items.
+  compare-find-related:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: find_related_materials
+    activeDeadlineSeconds: 3600 # backstop for a hung process; typical is ~95s, slowest observed 408s
+  process-sbf:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: process_sbf
+    activeDeadlineSeconds: 600
+  process-extract-frames:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: "1"
+      limits:
+        cpu: "3"
+        memory: 1500Mi
+    queue: video_match_frames_extract_frames_tasks
+    activeDeadlineSeconds: 5400
+  process-extract:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "2"
+        memory: 2Gi
+    queue: video_match_frames_extract_tasks
+    activeDeadlineSeconds: 600
+  process-video-fingerprint:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: video_match_frames_fingerprint_tasks
+    activeDeadlineSeconds: 600
+  process-frames:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: process_frames
+    activeDeadlineSeconds: 600
+  process-ingest-frames:
+    enabled: true
+    maxReplicaCount: 5
+    resources:
+      requests:
+        memory: 2Gi
+        cpu: "750m"
+      limits:
+        cpu: "750m"
+        memory: 2Gi
+    queue: ingest_frames
+    activeDeadlineSeconds: 600
+  comparison-longform-data-generation:
+    enabled: true
+    maxReplicaCount: 6
+    resources:
+      requests:
+        memory: 3Gi
+        cpu: "1"
+      limits:
+        memory: 3Gi
+    queue: generate_grouped_comparison_result_data
+    activeDeadlineSeconds: 6600 # 110 minutes
+
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+# HTTP/non-TLS access — for on-prem clusters without ingress/TLS termination.
+# Leave unset for standard HTTPS production deployments.
+# snicketProtocol sets SNICKET_PROTOCOL in all pods (e.g. "http").
+# snicketPort sets SNICKET_PORT (optional — defaults to 80 when protocol is http).
+snicketProtocol: ""
+snicketPort: ""
+
+# This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+  # EKS Auto Mode: creates an IngressClassParams resource to configure ALB behaviour.
+  # Standard ALB annotations (e.g. load-balancer-attributes) are not supported in
+  # EKS Auto Mode — use this block instead.
+  # Set create: true only when the cluster uses EKS Auto Mode and ingress.className is set.
+  # IngressClassParams is cluster-scoped; do not enable if sharing a className with
+  # other environments on the same cluster.
+  ingressClassParams:
+    create: false
+    scheme: internet-facing
+    loadBalancerAttributes: []
+
+# Gateway API HTTPRoute — cloud-agnostic alternative to ingress for
+# Gateway-API clusters (GKE, on-prem). The Gateway itself is cluster infra (owns
+# the LB IP, GatewayClass, and TLS cert); this route just attaches to it.
+# Disabled by default so AWS keeps using `ingress` above. Enable EITHER ingress
+# OR httpRoute, not both.
+httpRoute:
+  enabled: false
+  annotations: {}
+  # The infra-owned Gateway to attach to. Omit namespace when the Gateway is in
+  # the same namespace as this release (no ReferenceGrant needed). Set
+  # sectionName to bind a specific listener (e.g. "https").
+  parentRefs:
+    - name: gateway
+      # namespace: ""
+      # sectionName: ""
+  # Hostnames this route answers for. Empty = match all hosts on the listener
+  # (useful before a real domain/cert exists). Set to the app domain once TLS is on.
+  hostnames: []
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      # backendRef is always the web Service (platform) on service.port.
+
+# GKE-specific extras. Enable on GKE Gateway clusters. Currently adds
+# a HealthCheckPolicy so the GKE Gateway health-checks the app's /up endpoint —
+# GKE otherwise defaults the backend health check to "/", which the app
+# 302-redirects, marking the backend unhealthy. Off everywhere else (the
+# HealthCheckPolicy CRD is GKE-only).
+gke:
+  enabled: false
+  healthCheckPath: /up
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Additional environment variables for the application
+env: []
+  # - name: EXAMPLE_VAR
+  #   value: "example_value"
+
+# Initial user configuration for seeding
+adminUser:
+  email: "admin@snicketlabs.io"
+  firstName: "Admin"
+  lastName: "User"
+  roles: "email_and_password,assure_admin"
+  organisationName: "Snicket Labs"
+  organisationRoles: "assure_admin"
+
+# Postgres connection. The chart does not provision a database — point it at one
+# you run yourself (RDS, CloudNativePG, or any reachable Postgres).
+#
+# REQUIRED: the host, either as primaryHost below or as dbPrimaryHostSecret.
+# Rendering fails with a named error if neither is set, rather than installing
+# something that cannot reach a database.
+postgres:
+  primaryHost: "" # e.g. my-db.eu-west-2.rds.amazonaws.com
+  port: 5432
+  auth:
+    username: "platform"
+    database: "platform"
+    # Prefer passwordSecret below over a literal password here.
+    password: ""
+  # Read any of these from a Secret instead of the plain values above. Each is
+  # independent — use as many or as few as suit how your credentials are stored.
+  # passwordSecret:
+  #   name: "my-pg-secret"
+  #   key: "password"
+  # userNameSecret:
+  #   name: "my-pg-secret"
+  #   key: "username"
+  # dbNameSecret:
+  #   name: "my-pg-secret"
+  #   key: "db_name"
+  # dbPrimaryHostSecret:
+  #   name: "my-pg-secret"
+  #   key: "host"
+  # dbPortSecret:
+  #   name: "my-pg-secret"
+  #   key: "port"
+  #
+  # With dbPrimaryHostSecret the chart cannot work the host out at render time,
+  # so kedaAutoScaling.postgres.host has to be set explicitly as well.
+
+# S3 Configuration
+s3:
+  # Both of these are REQUIRED and deliberately have no default: the previous
+  # defaults ("adsignal-primary-bucket" and "us-east-1") were plausible enough
+  # to deploy cleanly while pointing at the wrong bucket and the wrong region.
+  # Rendering now fails with a named error rather than starting something that
+  # quietly misbehaves.
+  primaryBucket: ""   # REQUIRED → S3_PRIMARY_BUCKET. The bucket this deployment uses for primary storage
+  region: ""          # REQUIRED → COMPATIBLE_S3_REGION, AWS_REGION. The region your bucket and cluster are in, e.g. eu-west-2
+  accessKeyId: "dummy-key"                  # unused — kept for backwards compat; use compatibleCredentialsSecret
+  secretAccessKey: "dummy-secret"           # unused — kept for backwards compat; use compatibleCredentialsSecret
+
+  # S3-compatible backend (GCS, Ceph, MinIO, etc.).
+  # Leave all empty on AWS — IRSA and the default S3 endpoint are used.
+  compatibleEndpoint: ""        # → COMPATIBLE_ENDPOINT_URL_S3 — internal pod→storage URL
+                                #   e.g. https://storage.googleapis.com or http://ceph-rgw.svc:80
+  compatiblePublicEndpoint: ""  # → COMPATIBLE_PUBLIC_ENDPOINT_URL_S3 — browser-reachable URL;
+                                #   only needed when the internal endpoint is not reachable by browsers
+                                #   (e.g. on-prem Ceph behind MetalLB). Omit to use compatibleEndpoint.
+  compatibleCredentialsSecret: "" # → COMPATIBLE_S3_ACCESS_KEY / COMPATIBLE_S3_SECRET_KEY
+                                  #   (name of a k8s Secret, e.g. s3-credentials)
+  compatibleAccessKeyField: ""  # key name within the secret for the access key (default: access_key_id)
+  compatibleSecretKeyField: ""  # key name within the secret for the secret key (default: secret_access_key)
+  compatibleForcePathStyle: ""  # → COMPATIBLE_S3_FORCE_PATH_STYLE — "true" or "false" (default: "true")
+                                #   required by Ceph, MinIO, and GCS S3 interop; only override if your
+                                #   store explicitly uses virtual-hosted style URLs
+
+domain: snicketlabs.example.com
+
+monitoring:
+  enabled: false
+  dashboards:
+    enabled: false
+  # Match-specific dashboards. Currently the per-tier view of the matchcore
+  # fingerprinting jobs: what is running now and against which material, wall
+  # time per minute of source, and the CPU, throttling and memory each tier
+  # actually uses against its envelope. Needs the Postgres datasource
+  # (monitoring.postgresDashboards) for the job tables.
+  matchDashboards:
+    enabled: false
+
+# Subchart values. These are ROOT keys named after the dependency, installed
+# when monitoring.enabled (kube-prometheus-stack) and monitoring.logging.enabled
+# (loki-stack) are set. Nesting them under monitoring: is silently ignored.
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      # Scrape the chart's PodMonitors. With the subchart's default an empty
+      # selector means "only objects labelled release: <release>", which the
+      # PodMonitors do not carry, so metrics.enabled rendered PodMonitors that
+      # nothing scraped.
+      podMonitorSelectorNilUsesHelmValues: false
+
+materialProcessingPipelines: "default|duration>=0"
+materialProcessingCount: "default=5"

@@ -1,0 +1,79 @@
+####
+# c8i.4xlarge Summary
+# CPU: 16 vCPUs
+# Memory: 32 GiB
+# Allocated resources:
+#   (Total limits may be over 100 percent, i.e., overcommitted.)
+#   Resource           Requests               Limits
+#   --------           --------               ------
+#   cpu                14370m (90%)           14950m (94%)
+#   memory             17116115763200m (60%)  22933615411200m (81%)
+####
+# Environment-Specific Scaling Overrides (Small - 1x baseline)
+#
+# This file overrides ONLY the maxReplicaCount for each scaledJob and scaledObject.
+# All other configuration (resources, queues, timeouts, etc.)
+# is defined in values.yaml and inherited via Helm's deep merge.
+#
+# Helm deep merges these values with values.yaml when you use multiple -f flags:
+#   helm install ... --values values.yaml -f environment-sizes/small/small.yaml
+#
+# Only the specific fields defined here (maxReplicaCount) override the base values.
+# All other fields from values.yaml are preserved.
+#
+# Sizing multipliers across environments:
+# - small.yaml: 1x (baseline - these values)
+# - medium.yaml: 2x (double these maxReplicaCount values)
+# - large.yaml: 3x (triple these maxReplicaCount values)
+####
+scaledObjects:
+  generic:
+    maxReplicaCount: 3
+
+scaledJobs:
+  ingest-proxy-generate:
+    maxReplicaCount: 5
+  ingest-attach-image:
+    maxReplicaCount: 5
+  ingest-process-materials:
+    maxReplicaCount: 5
+  ingest-materials:
+    maxReplicaCount: 5
+  ingest-process-qc:
+    maxReplicaCount: 2
+  ingest-process-media:
+    maxReplicaCount: 5
+  ingest-download-media:
+    maxReplicaCount: 5
+  audiomatch-fingerprint:
+    maxReplicaCount: 5
+  compare-relate:
+    maxReplicaCount: 5
+  process-complete-materials:
+    maxReplicaCount: 5
+  process-compare-results:
+    maxReplicaCount: 5
+  process-audio-insights:
+    maxReplicaCount: 5
+  process-ai-tagging:
+    maxReplicaCount: 5
+  process-unique-frames-groups:
+    maxReplicaCount: 5
+  process-unique-frames-create:
+    maxReplicaCount: 5
+  compare-find-related:
+    maxReplicaCount: 5
+  process-sbf:
+    maxReplicaCount: 5
+  process-extract-frames:
+    maxReplicaCount: 5
+  process-extract:
+    maxReplicaCount: 5
+  process-video-fingerprint:
+    maxReplicaCount: 5
+  process-frames:
+    maxReplicaCount: 5
+  process-ingest-frames:
+    maxReplicaCount: 5
+  comparison-longform-data-generation:
+    maxReplicaCount: 2

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prestop-kill-script
+data:
+  prestop.sh: |
+    #!/bin/sh
+    if [ -n $PRESTOP_PROC_TO_KILL ]; then
+      echo "Attempting to pkill $PRESTOP_PROC_TO_KILL before terminating"
+      pkill $PRESTOP_PROC_TO_KILL
+      if [ $? -eq 0 ]; then
+        echo "pkill $PRESTOP_PROC_TO_KILL successful"
+      else
+        echo "pkill $PRESTOP_PROC_TO_KILL failed"
+      fi
+      sleep 2
+    fi

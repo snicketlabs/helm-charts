@@ -1,0 +1,495 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "s3",
+    "domain",
+    "secretKeys",
+    "storage",
+    "webServers",
+    "scaledJobs",
+    "scaledObjects"
+  ],
+  "properties": {
+    "smtp": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "secret": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" }
+          }
+        }
+      }
+    },
+    "honeybadger": {
+      "type": "object",
+      "properties": {
+        "secretName": { "type": "string" },
+        "secretKey": { "type": "string" },
+        "environment": { "type": "string" }
+      }
+    },
+    "owningUser": {
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "organisationName": { "type": "string" },
+        "secret": {
+          "type": "object",
+          "required": ["generate", "name"],
+          "properties": {
+            "generate": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        }
+      }
+    },
+    "goodJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pollInterval": { "type": "integer", "minimum": 1 },
+        "probePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "shutdownTimeout": { "type": "integer", "minimum": 1 },
+        "shutdownGraceSeconds": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "kedaAutoScaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "postgres": {
+          "type": "object",
+          "properties": {
+            "pollingInterval": { "type": "integer" },
+            "sslmode": { "type": "string" },
+            "host": { "type": "string" },
+            "port": { "type": "integer" },
+            "autoCreateRole": { "type": "boolean" },
+            "roleName": { "type": "string" },
+            "dbUser": { "type": "string" },
+            "dbName": { "type": "string" },
+            "authenticationRef": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "secretName": { "type": "string" },
+                "secretKey": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "tag": { "type": "string" }
+      }
+    },
+    "dbPrepareJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "annotations": { "type": "object" },
+        "backoffLimit": { "type": "integer" },
+        "helmHookAnnotations": { "type": "object" }
+      }
+    },
+    "duration_async_required": { "type": "string" },
+    "rails_env": { "type": "string" },
+    "logLevel": {
+      "type": "string",
+      "enum": ["debug", "info", "warn", "error", "fatal"]
+    },
+    "log_path_mode": { "type": "string" },
+    "log_path": { "type": "string" },
+    "secretKeys": {
+      "type": "object",
+      "required": ["secret"],
+      "properties": {
+        "secret": {
+          "type": "object",
+          "required": ["generate", "name"],
+          "properties": {
+            "generate": { "type": "boolean" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tmpStorage": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "path": { "type": "string" },
+            "sizeLimit": { "type": "string" }
+          }
+        }
+      }
+    },
+    "volumes": { "type": "array" },
+    "volumeMounts": { "type": "array" },
+    "imagePullSecrets": { "type": "array" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "extraEnvs": { "type": "array" },
+    "extraEnvSecrets": { "type": "array" },
+    "contentSecrets": { "type": "array" },
+    "serviceAccount": {
+      "type": "object",
+      "required": ["create"],
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "automount": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "name": { "type": "string" }
+      }
+    },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "podSecurityContext": {
+      "type": "object",
+      "properties": {
+        "runAsUser": { "type": "integer" },
+        "fsGroup": { "type": "integer" }
+      }
+    },
+    "securityContext": {
+      "type": "object",
+      "properties": {
+        "capabilities": { "type": "object" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "runAsUser": { "type": "integer" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "metricsPort": { "type": "integer" }
+      }
+    },
+    "webServers": {
+      "type": "object",
+      "required": ["port", "replicas", "resources"],
+      "properties": {
+        "port": { "type": "integer" },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "livenessProbe": { "type": "object" },
+        "readinessProbe": { "type": "object" },
+        "railsMaxThreads": { "type": "integer", "minimum": 1 },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "railsConsole": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "scaledObjects": {
+      "type": "object",
+      "required": ["generic"],
+      "properties": {
+        "generic": { "$ref": "#/definitions/scaledObject" }
+      },
+      "additionalProperties": { "$ref": "#/definitions/scaledObject" }
+    },
+    "scaledJobs": {
+      "type": "object",
+      "required": [
+        "dv-matchcore",
+        "hd-matchcore",
+        "uhd-matchcore",
+        "j2k-hd-matchcore",
+        "j2k-uhd-matchcore",
+        "ingest-proxy-generate",
+        "ingest-attach-image",
+        "ingest-process-materials",
+        "ingest-materials",
+        "ingest-process-qc",
+        "ingest-process-media",
+        "ingest-download-media",
+        "audiomatch-fingerprint",
+        "compare-relate",
+        "process-complete-materials",
+        "process-compare-results",
+        "process-audio-insights",
+        "process-ai-tagging",
+        "process-unique-frames-groups",
+        "process-unique-frames-create",
+        "compare-find-related",
+        "process-sbf",
+        "process-extract-frames",
+        "process-extract",
+        "process-video-fingerprint",
+        "process-frames",
+        "process-ingest-frames",
+        "comparison-longform-data-generation"
+      ],
+      "properties": {
+        "fingerprinter-video": { "not": {}, "description": "Removed: the chart no longer deploys the rust fingerprinter. Delete this key; see UPGRADING.md." },
+        "fingerprinter-audio": { "not": {}, "description": "Removed: the chart no longer deploys the rust fingerprinter. Delete this key; see UPGRADING.md." },
+        "dv-matchcore": { "$ref": "#/definitions/scaledJob" },
+        "hd-matchcore": { "$ref": "#/definitions/scaledJob" },
+        "uhd-matchcore": { "$ref": "#/definitions/scaledJob" },
+        "j2k-hd-matchcore": { "$ref": "#/definitions/scaledJob" },
+        "j2k-uhd-matchcore": { "$ref": "#/definitions/scaledJob" },
+        "ingest-proxy-generate": { "$ref": "#/definitions/scaledJob" },
+        "ingest-attach-image": { "$ref": "#/definitions/scaledJob" },
+        "ingest-process-materials": { "$ref": "#/definitions/scaledJob" },
+        "ingest-materials": { "$ref": "#/definitions/scaledJob" },
+        "ingest-process-qc": { "$ref": "#/definitions/scaledJob" },
+        "ingest-process-media": { "$ref": "#/definitions/scaledJob" },
+        "ingest-download-media": { "$ref": "#/definitions/scaledJob" },
+        "audiomatch-fingerprint": { "$ref": "#/definitions/scaledJob" },
+        "compare-relate": { "$ref": "#/definitions/scaledJob" },
+        "process-complete-materials": { "$ref": "#/definitions/scaledJob" },
+        "process-compare-results": { "$ref": "#/definitions/scaledJob" },
+        "process-audio-insights": { "$ref": "#/definitions/scaledJob" },
+        "process-ai-tagging": { "$ref": "#/definitions/scaledJob" },
+        "process-unique-frames-groups": { "$ref": "#/definitions/scaledJob" },
+        "process-unique-frames-create": { "$ref": "#/definitions/scaledJob" },
+        "compare-find-related": { "$ref": "#/definitions/scaledJob" },
+        "process-sbf": { "$ref": "#/definitions/scaledJob" },
+        "process-extract-frames": { "$ref": "#/definitions/scaledJob" },
+        "process-extract": { "$ref": "#/definitions/scaledJob" },
+        "process-video-fingerprint": { "$ref": "#/definitions/scaledJob" },
+        "process-frames": { "$ref": "#/definitions/scaledJob" },
+        "process-ingest-frames": { "$ref": "#/definitions/scaledJob" },
+        "comparison-longform-data-generation": { "$ref": "#/definitions/scaledJob" }
+      },
+      "additionalProperties": { "$ref": "#/definitions/scaledJob" }
+    },
+    "service": {
+      "type": "object",
+      "required": ["type", "port"],
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "snicketProtocol": { "type": "string" },
+    "snicketPort": { "type": "string" },
+    "ingress": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "hosts": { "type": "array" },
+        "tls": { "type": "array" },
+        "ingressClassParams": {
+          "type": "object",
+          "properties": {
+            "create": { "type": "boolean" },
+            "scheme": { "type": "string" },
+            "loadBalancerAttributes": { "type": "array" }
+          }
+        }
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "parentRefs": { "type": "array" },
+        "hostnames": { "type": "array" },
+        "rules": { "type": "array" }
+      }
+    },
+    "gke": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "healthCheckPath": { "type": "string" }
+      }
+    },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "env": { "type": "array" },
+    "adminUser": {
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "roles": { "type": "string" },
+        "organisationName": { "type": "string" },
+        "organisationRoles": { "type": "string" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primaryHost": { "type": "string" },
+        "port": { "type": ["integer", "string"] },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "username": { "type": "string" },
+            "database": { "type": "string" },
+            "password": { "type": "string" }
+          }
+        },
+        "passwordSecret": { "$ref": "#/definitions/secretRef" },
+        "userNameSecret": { "$ref": "#/definitions/secretRef" },
+        "dbNameSecret": { "$ref": "#/definitions/secretRef" },
+        "dbPrimaryHostSecret": { "$ref": "#/definitions/secretRef" },
+        "dbPortSecret": { "$ref": "#/definitions/secretRef" }
+      }
+    },
+    "global": { "type": "object" },
+    "s3": {
+      "type": "object",
+      "required": ["primaryBucket", "region"],
+      "properties": {
+        "primaryBucket": { "type": "string" },
+        "accessKeyId": { "type": "string" },
+        "secretAccessKey": { "type": "string" },
+        "region": { "type": "string" },
+        "compatibleEndpoint": { "type": "string" },
+        "compatiblePublicEndpoint": { "type": "string" },
+        "compatibleCredentialsSecret": { "type": "string" },
+        "compatibleAccessKeyField": { "type": "string" },
+        "compatibleSecretKeyField": { "type": "string" },
+        "compatibleForcePathStyle": { "type": "string", "enum": ["", "true", "false"] }
+      }
+    },
+    "domain": { "type": "string", "minLength": 1 },
+    "monitoring": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "dashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "matchDashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "materialProcessingPipelines": { "type": "string" },
+    "materialProcessingCount": { "type": "string" },
+    "workerDeploymentStrategy": { "type": "string" },
+    "loki-stack": { "type": "object", "additionalProperties": true },
+    "kube-prometheus-stack": { "type": "object", "additionalProperties": true }
+  },
+  "definitions": {
+    "secretRef": {
+      "description": "A key in an existing Secret, used in place of a literal Postgres connection value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": { "type": "string" },
+        "key": { "type": "string" }
+      }
+    },
+    "cpuQuantity": {
+      "description": "CPU in canonical Kubernetes form: whole cores (\"2\") or millicores (\"750m\"). Must be a string. Decimals (0.75) and whole-core millicores (2000m) are rejected because the API server rewrites them when it stores the object, which transfers server-side-apply ownership of the field to KEDA and makes later upgrades fail. See \"Upgrades and field conflicts\" in the chart documentation.",
+      "type": "string",
+      "allOf": [
+        { "pattern": "^(0|[1-9][0-9]*m?)$" },
+        { "not": { "pattern": "^[0-9]+000m$" } }
+      ]
+    },
+    "memoryQuantity": {
+      "description": "Memory in canonical Kubernetes form: an integer with an optional suffix (Ki, Mi, Gi, Ti, k, M, G, T). Must be a string. Decimals (1.5Gi, 0.8Gi) are rejected because the API server rewrites them when it stores the object, which transfers server-side-apply ownership of the field to KEDA and makes later upgrades fail. Prefer the largest binary suffix that divides exactly: 4Gi, not 4096Mi. See \"Upgrades and field conflicts\" in the chart documentation.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(Ki|Mi|Gi|Ti|k|M|G|T)?$"
+    },
+    "resourceSpec": {
+      "type": "object",
+      "properties": {
+        "cpu": { "$ref": "#/definitions/cpuQuantity" },
+        "memory": { "$ref": "#/definitions/memoryQuantity" },
+        "ephemeral-storage": { "$ref": "#/definitions/memoryQuantity" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceSpec" },
+        "limits": { "$ref": "#/definitions/resourceSpec" }
+      }
+    },
+    "scaledObject": {
+      "type": "object",
+      "required": ["minReplicaCount", "maxReplicaCount", "concurrency", "shutdownTimeout", "resources", "queues"],
+      "properties": {
+        "minReplicaCount": { "type": "integer", "minimum": 0 },
+        "fingerprinter": { "not": {}, "description": "Removed: the chart no longer deploys the rust fingerprinter. Delete this key; see UPGRADING.md." },
+        "maxReplicaCount": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "dbPoolSize": { "type": "integer" },
+        "dbFollowerPoolSize": { "type": "integer" },
+        "shutdownTimeout": { "type": "integer", "minimum": 1 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "queues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "priority"],
+            "properties": {
+              "name": { "type": "string" },
+              "priority": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    "scaledJob": {
+      "type": "object",
+      "required": ["enabled", "maxReplicaCount", "resources", "queue", "activeDeadlineSeconds"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxReplicaCount": { "type": "integer", "minimum": 0 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "queue": { "type": "string", "minLength": 1 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "fingerprinter": { "not": {}, "description": "Removed: the chart no longer deploys the rust fingerprinter. Delete this key; see UPGRADING.md." }
+      },
+      "additionalProperties": true
+    }
+  }
+}

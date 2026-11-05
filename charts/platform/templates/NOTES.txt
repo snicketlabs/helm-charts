@@ -1,0 +1,44 @@
+{{- if or .Values.ingress.enabled .Values.httpRoute.enabled }}
+1. Visit the application at:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if .Values.httpRoute.enabled }}
+{{- range .Values.httpRoute.hostnames }}
+  http://{{ . }}/
+{{- end }}
+  (Gateway external address: kubectl get gateway -n {{ .Release.Namespace }} -o jsonpath='{.items[*].status.addresses[*].value}')
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+1. Get the application URL by running:
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "platform.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+1. Get the application URL (the LoadBalancer IP may take a few minutes to be assigned):
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "platform.fullname" . }} --template "{{ "{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}" }}")
+  echo http://$SERVICE_IP:{{ .Values.service.port }}
+  # Watch for the IP: kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "platform.fullname" . }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+1. Access the application via port-forward at http://127.0.0.1:3000:
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "platform.name" . }},app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=web" -o jsonpath="{.items[0].metadata.name}")
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 3000:3000
+{{- end }}
+
+2. Admin User Credentials:
+   The initial admin credentials are stored in:
+
+   kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.fullname" . }}-owning-user-credentials -o jsonpath="{.data.email}" | base64 -d
+   kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.fullname" . }}-owning-user-credentials -o jsonpath="{.data.password}" | base64 -d
+
+{{ if .Values.monitoring.enabled }}
+3. Grafana Admin Password:
+   The Grafana admin password is stored in the Kubernetes secret created by kube-prometheus-stack:
+
+   kubectl get secret {{ .Release.Name }}-grafana -o jsonpath="{.data.admin-password}" -n {{ .Release.Name }} | base64 -d ; echo
+
+   Username: admin
+{{- end }}

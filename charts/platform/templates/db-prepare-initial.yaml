@@ -1,0 +1,81 @@
+{{/*
+One-time initial database preparation Job for fresh installs: schema, seeds and
+the KEDA role, in that order (platform.dbPrepareCommand).
+
+This is a plain Kubernetes Job (not a Helm hook) so it runs alongside all other
+resources when the chart is first installed. An init container waits for postgres
+to accept connections first, avoiding the race between postgres startup and
+schema creation.
+
+It is only rendered on a Helm install, not on upgrades. The first upgrade
+prunes it.
+
+This used to be a lookup() of the existing Job. That left the Job out of the
+first upgrade's manifest, so Helm pruned it, and the next upgrade's lookup
+found nothing and ran it again: every other upgrade re-ran it straight after
+the pre-upgrade hook had done the same work.
+
+On upgrades the db-prepare hook (db-prepare-job.yaml, pre-upgrade) runs the
+same steps.
+*/}}
+{{- if .Release.IsInstall }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rails-initial-db-prepare-{{ include "platform.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-prepare-initial
+spec:
+  ttlSecondsAfterFinished: 86400 # 24 hours — Kubernetes cleans up without Helm deletion watch
+  backoffLimit: {{ .Values.dbPrepareJob.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-prepare-initial
+    spec:
+      serviceAccountName: {{ include "platform.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              until PGPASSWORD="$DB_PASSWORD" psql -h "$DB_PRIMARY_HOST" -U "$DB_USERNAME" -d "$DB_DATABASE" -c "SELECT 1" > /dev/null 2>&1; do
+                echo "waiting for postgres at $DB_PRIMARY_HOST..."
+                sleep 3
+              done
+          env:
+           {{- include "platform.envVars" . | nindent 12 }}
+      containers:
+        - name: rails-db-prepare
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          args:
+            {{- include "platform.dbPrepareCommand" . | nindent 12 }}
+          env:
+           {{- include "platform.envVars" . | nindent 12 }}
+           {{- include "platform.owningUserEnvVars" . | nindent 12 }}
+           {{- include "platform.kedaPostgresRoleEnv" . | nindent 12 }}
+          volumeMounts:
+           {{- include "platform.volumeMounts" . | nindent 12 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "platform.volumes" . | nindent 8 }}
+{{- end }}

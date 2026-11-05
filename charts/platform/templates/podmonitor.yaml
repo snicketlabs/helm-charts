@@ -1,0 +1,23 @@
+{{- if eq .Values.metrics.enabled true }}
+{{- /* ScaledJob pods also expose the metrics port but carry no
+       app.kubernetes.io/component label, so nothing selects them yet. */}}
+{{- range $name, $worker := .Values.scaledObjects }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $name }}-worker-{{ include "platform.fullname" $ }}
+  labels:
+    {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ $.Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}-worker
+  podMetricsEndpoints:
+    - port: "metrics"
+{{- end }}
+{{- end }}

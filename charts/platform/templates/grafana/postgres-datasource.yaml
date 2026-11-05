@@ -1,0 +1,24 @@
+{{- if and .Values.monitoring.postgresDashboards (default false .Values.monitoring.postgresDashboards.enabled) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-postgres-datasource
+  labels:
+    grafana_datasource: "1"
+type: Opaque
+stringData:
+  postgres-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Postgres
+        type: postgres
+        access: proxy
+        isDefault: false
+        jsonData:
+          sslmode: require
+          database: $__file{/etc/secrets/db_name}
+        secureJsonData:
+          password: $__file{/etc/secrets/password}
+        url: $__file{/etc/secrets/host}:$__file{/etc/secrets/port}
+        user: $__file{/etc/secrets/username}
+{{- end }}

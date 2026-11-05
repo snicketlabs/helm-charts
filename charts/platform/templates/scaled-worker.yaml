@@ -1,0 +1,116 @@
+{{ range $name, $worker := .Values.scaledObjects }}
+{{- include "platform.rejectRenamedKeys" (dict "kind" "scaledObjects" "name" $name "values" $worker) }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $name }}-worker-{{ include "platform.fullname" $ }}
+spec:
+  scaleTargetRef:
+    name: {{ $name }}-worker-{{ include "platform.fullname" $ }}
+  minReplicaCount: {{ $worker.minReplicaCount | default 0 }}
+  maxReplicaCount: {{ $worker.maxReplicaCount }}
+  pollingInterval:  {{ $worker.pollingInterval | default $.Values.kedaAutoScaling.postgres.pollingInterval | default 30 }}
+  cooldownPeriod: {{ $worker.cooldownPeriod | default 300 }}
+  triggers:
+    - type: postgresql
+      authenticationRef:
+        name: {{ $.Values.kedaAutoScaling.postgres.authenticationRef.name }}
+      metadata:
+        host: {{ include "platform.kedaPostgresHost" $ }}
+        port: "{{ $.Values.kedaAutoScaling.postgres.port | default 5432 }}"
+        dbName: {{ $.Values.kedaAutoScaling.postgres.dbName | default $.Values.postgres.auth.database }}
+        userName: {{ $.Values.kedaAutoScaling.postgres.dbUser | default $.Values.kedaAutoScaling.postgres.roleName | default "db_keda_ro" }}
+        sslmode: {{ $.Values.kedaAutoScaling.postgres.sslmode | default "require" }}
+        {{- $queueNames := list }}
+        {{- range $queue := $worker.queues }}
+        {{- $queueNames = append $queueNames $queue.name }}
+        {{- end }}
+        query: >-
+          SELECT COUNT(1)
+          FROM good_jobs
+          WHERE finished_at IS NULL
+            AND scheduled_at < NOW()
+            AND queue_name IN ('{{ $queueNames | join "','" }}')
+        targetQueryValue: "10"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-worker-{{ include "platform.fullname" $ }}
+  labels:
+    {{- include "platform.labels" $ | nindent 4 }}
+spec:
+  strategy:
+    type: {{ $.Values.workerDeploymentStrategy | default "RollingUpdate" }}
+  replicas: 1  # Managed by KEDA ScaledObject
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $name }}-worker
+  template:
+    metadata:
+      {{- with $.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "platform.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}-worker
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "platform.serviceAccountName" $ }}
+      # GoodJob drains for GOOD_JOB_SHUTDOWN_TIMEOUT (shutdownTimeout) on SIGTERM; give the pod that plus headroom before SIGKILL.
+      terminationGracePeriodSeconds: {{ add $worker.shutdownTimeout $.Values.goodJob.shutdownGraceSeconds }}
+      {{- with $.Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "platform.waitForSchema" $ | nindent 8 }}
+      containers:
+        - name: good-job
+          {{- with $.Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "platform.envVars" $ | nindent 12 }}
+            {{- include "platform.workerEnvVars" (dict "worker" $worker "goodJob" $.Values.goodJob) | nindent 12 }}
+          args:
+            {{- include "platform.workerArgs" (dict "worker" $worker) | nindent 12 }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - name: metrics
+              containerPort: {{ $.Values.metrics.metricsPort }}
+            - name: probe-port
+              containerPort: {{ $.Values.goodJob.probePort }}
+          {{- include "platform.goodJobWorkerProbes" (dict "goodJob" $.Values.goodJob) | nindent 10 }}
+          {{- with $worker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "platform.volumeMounts" $ | nindent 12 }}
+      volumes:
+        {{- include "platform.volumes" $ | nindent 8 }}
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

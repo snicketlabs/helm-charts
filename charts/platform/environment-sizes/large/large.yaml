@@ -1,0 +1,69 @@
+####
+# Environment-Specific Scaling Overrides (Large - 3x)
+#
+# This file overrides ONLY the maxReplicaCount for each scaledJob and scaledObject.
+# All other configuration (resources, queues, timeouts, etc.)
+# is defined in values.yaml and inherited via Helm's deep merge.
+#
+# Helm deep merges these values with values.yaml when you use multiple -f flags:
+#   helm install ... --values values.yaml -f environment-sizes/large/large.yaml
+#
+# Only the specific fields defined here (maxReplicaCount) override the base values.
+# All other fields from values.yaml are preserved.
+#
+# Sizing multipliers across environments:
+# - small.yaml: 1x (baseline)
+# - medium.yaml: 2x (double the baseline)
+# - large.yaml: 3x (these values - triple the baseline)
+####
+scaledObjects:
+  generic:
+    maxReplicaCount: 9
+
+scaledJobs:
+  ingest-proxy-generate:
+    maxReplicaCount: 15
+  ingest-attach-image:
+    maxReplicaCount: 15
+  ingest-process-materials:
+    maxReplicaCount: 15
+  ingest-materials:
+    maxReplicaCount: 15
+  ingest-process-qc:
+    maxReplicaCount: 6
+  ingest-process-media:
+    maxReplicaCount: 15
+  ingest-download-media:
+    maxReplicaCount: 15
+  audiomatch-fingerprint:
+    maxReplicaCount: 15
+  compare-relate:
+    maxReplicaCount: 15
+  process-complete-materials:
+    maxReplicaCount: 15
+  process-compare-results:
+    maxReplicaCount: 15
+  process-audio-insights:
+    maxReplicaCount: 15
+  process-ai-tagging:
+    maxReplicaCount: 15
+  process-unique-frames-groups:
+    maxReplicaCount: 15
+  process-unique-frames-create:
+    maxReplicaCount: 15
+  compare-find-related:
+    maxReplicaCount: 15
+  process-sbf:
+    maxReplicaCount: 15
+  process-extract-frames:
+    maxReplicaCount: 15
+  process-extract:
+    maxReplicaCount: 15
+  process-video-fingerprint:
+    maxReplicaCount: 15
+  process-frames:
+    maxReplicaCount: 15
+  process-ingest-frames:
+    maxReplicaCount: 15
+  comparison-longform-data-generation:
+    maxReplicaCount: 6
