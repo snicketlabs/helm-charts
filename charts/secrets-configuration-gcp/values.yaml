@@ -53,6 +53,14 @@ k8sSecretNames:
   docker: dockerconfig
   honeybadger: honeybadger-api-key
 
+# The image pull credentials. Off for a deployment managed by Distr: the agent
+# injects its own pull secret (sh.distr.agent.v1.<release>.pull) covering the
+# registry, so no dockerconfig Secret is needed and secretNames.docker is then
+# ignored. On by default, for a plain `helm install` where the chart is the only
+# thing providing them.
+docker:
+  enabled: true
+
 smtp:
   enabled: false
   secretName: my-cluster-smtp
