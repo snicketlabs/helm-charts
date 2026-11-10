@@ -32,6 +32,16 @@ stores plain string values (no per-secret regions/replication flags like AWS).
      --project "$PROJECT_ID" --data-file=-
    ```
 
+   > **Not needed for a deployment managed by Distr.** The agent injects its own
+   > pull secret (`sh.distr.agent.v1.<release>.pull`) covering the registry, so the
+   > chart has nothing to add. Set `docker.enabled: false` and skip this secret;
+   > leaving it on without creating the secret leaves a `dockerconfig`
+   > ExternalSecret that never syncs.
+   >
+   > Do **not** set `imagePullSecrets` on the platform chart either: its
+   > `distr/base-values.yaml` keeps that an empty list specifically so the agent can
+   > inject into it, and Helm replaces lists rather than merging them.
+
 2. **Honeybadger API token** (provided securely by Snicket Labs), stored as `snicketlabs-honeybadger-secret`:
 
    ```bash
