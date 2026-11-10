@@ -57,6 +57,18 @@ entries:
     version: 0.2.0
   secrets-configuration-gcp:
   - apiVersion: v2
+    created: "2026-11-10T15:43:40.989964246Z"
+    description: ESO-based secrets configuration for the Snicket Labs platform (GCP).
+      Syncs GCP Secret Manager secrets into native Kubernetes Secrets via External
+      Secrets Operator + Workload Identity. The ESO operator itself is installed separately
+      (tf-dt-external-secrets).
+    digest: 5ecde383bac753da5f360082e8ad54e24d1c7accd508285f995facc56f7c4130
+    name: secrets-configuration-gcp
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.5.0/secrets-configuration-gcp-0.5.0.tgz
+    version: 0.5.0
+  - apiVersion: v2
     created: "2026-11-09T10:57:58.484926314Z"
     description: ESO-based secrets configuration for the Snicket Labs platform (GCP).
       Syncs GCP Secret Manager secrets into native Kubernetes Secrets via External
@@ -92,4 +104,4 @@ entries:
     urls:
     - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.2.0/secrets-configuration-gcp-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-09T10:57:58.484943045Z"
+generated: "2026-11-10T15:43:40.989984566Z"
