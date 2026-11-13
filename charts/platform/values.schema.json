@@ -405,6 +405,15 @@
           "properties": {
             "enabled": { "type": "boolean" }
           }
+        },
+        "alerts": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "ruleLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+            "alertLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+            "oomKilledWindow": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h|d|w|y)$" }
+          }
         }
       }
     },

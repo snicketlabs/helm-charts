@@ -966,6 +966,24 @@ monitoring:
   # (monitoring.postgresDashboards) for the job tables.
   matchDashboards:
     enabled: false
+  # Prometheus alert rules, rendered as a PrometheusRule (needs the Prometheus
+  # Operator CRDs: installed by monitoring.enabled, or bring your own).
+  # PlatformTaskPodOOMKilled fires when a scaledJobs (oneAndDone) pod is killed
+  # for exceeding its memory limit. The application only sees an interruption
+  # and retries it, so without this alert an out-of-memory source quietly burns
+  # every retry. Alertmanager is not configured by this chart: route the alert
+  # with your own Alertmanager, or view it in Grafana / Prometheus.
+  alerts:
+    enabled: false
+    # Extra labels on the PrometheusRule object, for a Prometheus whose
+    # ruleSelector needs them. The bundled kube-prometheus-stack needs none:
+    # the rule always carries release: <release name>.
+    ruleLabels: {}
+    # Extra labels on every alert (e.g. team, or a severity override for routing).
+    alertLabels: {}
+    # How long an OOM kill keeps the alert firing. The killed pod and its
+    # metric can be gone within a minute on autoscaled clusters.
+    oomKilledWindow: 15m
 
 # Subchart values. These are ROOT keys named after the dependency, installed
 # when monitoring.enabled (kube-prometheus-stack) and monitoring.logging.enabled

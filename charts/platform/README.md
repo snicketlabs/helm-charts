@@ -5,7 +5,7 @@ status: 2
 -->
 <!-- AUTO-GENERATED — do not edit. Source: docs/README.md + README-generated.md.gotmpl. Regenerate with: make docs -->
 
-![Version: 1.0.0](https://img.shields.io/badge/Version-1.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
+![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
 
 Snicket Labs Platform Self Hosted
 
@@ -327,7 +327,7 @@ Or follow the [KEDA installation documentation](https://keda.sh/docs/latest/depl
 
 **Kubernetes Version**
 
-- Kubernetes 1.32+ is required as Platform needs sidecar Job support.
+- Kubernetes 1.32+ is required (the minimum version the chart is tested against).
 
 ### Configuring KEDA
 
@@ -866,6 +866,32 @@ monitoring:
   matchDashboards:
     enabled: true
 ```
+
+## Alerts
+
+The chart can install Prometheus alert rules as a `PrometheusRule`. They need the Prometheus Operator CRDs, which `monitoring.enabled: true` installs, or your own Prometheus Operator.
+
+| Alert | Severity | Fires when |
+|---|---|---|
+| `PlatformTaskPodOOMKilled` | warning | A one-and-done (`scaledJobs`) task pod is killed for exceeding its memory limit |
+
+**Why `PlatformTaskPodOOMKilled` matters.** When a task pod runs out of memory, the application only sees an interruption and retries the job as normal. A source that always runs out of memory therefore uses every retry before it fails, and the job error does not mention memory. The alert names the pod and tier. The usual fix is to raise `scaledJobs.<tier>.resources.limits.memory`. The [MatchCore Tiers Dashboard](#getting-the-most-out-of-your-metrics) shows how close each tier runs to its limit.
+
+The alert reads `kube_pod_container_status_terminated_reason` from kube-state-metrics. On autoscaled clusters a killed pod can be deleted within a minute, so the alert stays firing for `oomKilledWindow` (15m by default) after the kill. A pod deleted before it is scraped is never seen, so the alert catches most OOM kills, not every one.
+
+```yaml
+monitoring:
+  alerts:
+    enabled: true
+    # Only if your own Prometheus selects rules by label:
+    # ruleLabels:
+    #   prometheus: main
+    # Added to every alert, e.g. for Alertmanager routing:
+    # alertLabels:
+    #   team: platform
+```
+
+This chart does not configure Alertmanager. The bundled kube-prometheus-stack example above disables it, so alerts show in Grafana (**Alerting → Alert rules**) and in the Prometheus UI. To get notified, enable and configure Alertmanager in `kube-prometheus-stack`, or point your own Alertmanager at Prometheus.
 
 > Please consult with Snicket Labs technical services for monitoring configuration.
 
@@ -1416,6 +1442,10 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | materialProcessingPipelines | string | `"default|duration>=0"` |  |
 | metrics.enabled | bool | `true` |  |
 | metrics.metricsPort | int | `9090` |  |
+| monitoring.alerts.alertLabels | object | `{}` |  |
+| monitoring.alerts.enabled | bool | `false` |  |
+| monitoring.alerts.oomKilledWindow | string | `"15m"` |  |
+| monitoring.alerts.ruleLabels | object | `{}` |  |
 | monitoring.dashboards.enabled | bool | `false` |  |
 | monitoring.enabled | bool | `false` |  |
 | monitoring.matchDashboards.enabled | bool | `false` |  |
