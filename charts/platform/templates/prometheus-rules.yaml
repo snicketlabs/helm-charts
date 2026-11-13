@@ -1,0 +1,66 @@
+{{- /*
+Alert rules for the platform workloads (a PrometheusRule, needs the Prometheus
+Operator CRDs: installed by monitoring.enabled, or bring your own).
+
+PlatformTaskPodOOMKilled: a oneAndDone (scaledJobs) pod was killed for exceeding
+its memory limit. The application cannot see this: the retry pod only gets
+GoodJob::InterruptError and retries it like any interruption, so a source that
+always runs out of memory burns every retry with no mention of memory.
+
+Uses terminated_reason, NOT last_terminated_reason or restarts: scaledJob pods
+are restartPolicy Never, so they never restart and those series stay empty. The
+pod (and its series) can be garbage-collected within a minute on autoscaled
+clusters, so max_over_time keeps the alert firing for a while after the kill
+instead of flapping or being missed between evaluations. A pod deleted before
+kube-state-metrics is scraped is never seen at all, so treat this as "most OOM
+kills", not every one.
+*/}}
+{{- if .Values.monitoring.alerts.enabled }}
+{{- $tiers := list }}
+{{- range $name, $job := .Values.scaledJobs }}
+{{- if $job.enabled }}
+{{- $tiers = append $tiers $name }}
+{{- end }}
+{{- end }}
+{{- if $tiers }}
+{{- $fullname := include "platform.fullname" . }}
+{{- /* Pod names are <tier>-<fullname>-<job suffix>-<pod suffix>. Both regexes
+       are fully anchored by Prometheus, so overlapping tier names such as
+       hd-matchcore and j2k-hd-matchcore cannot match each other. */}}
+{{- $podRegex := printf "(%s)-%s-[^-]+-[^-]+" (join "|" (sortAlpha $tiers)) $fullname }}
+{{- $tierRegex := printf "(.+)-%s-[^-]+-[^-]+" $fullname }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $fullname }}-alerts
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    # The bundled kube-prometheus-stack only loads rules labelled with the
+    # release name (ruleSelectorNilUsesHelmValues defaults to true).
+    release: {{ .Release.Name }}
+    {{- with .Values.monitoring.alerts.ruleLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: {{ $fullname }}.task-pods
+      rules:
+        - alert: PlatformTaskPodOOMKilled
+          expr: |
+            label_replace(
+              max by (namespace, pod, container) (
+                max_over_time(kube_pod_container_status_terminated_reason{namespace="{{ .Release.Namespace }}", pod=~"{{ $podRegex }}", reason="OOMKilled"}[{{ .Values.monitoring.alerts.oomKilledWindow }}])
+              ) > 0,
+              "tier", "$1", "pod", "{{ $tierRegex }}"
+            )
+          labels:
+            severity: warning
+            {{- with .Values.monitoring.alerts.alertLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          annotations:
+            summary: {{ `Task pod {{ $labels.pod }} was OOMKilled` | quote }}
+            description: {{ `The {{ $labels.tier }} task pod {{ $labels.pod }} (container {{ $labels.container }}) in {{ $labels.namespace }} was killed for exceeding its memory limit. The job is retried as an ordinary interruption and will usually run out of memory again on every retry. Raise scaledJobs.{{ $labels.tier }}.resources.limits.memory, or check whether the source needs a bigger tier.` | quote }}
+{{- end }}
+{{- end }}
