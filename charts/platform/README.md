@@ -5,7 +5,7 @@ status: 2
 -->
 <!-- AUTO-GENERATED — do not edit. Source: docs/README.md + README-generated.md.gotmpl. Regenerate with: make docs -->
 
-![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
+![Version: 2.0.0](https://img.shields.io/badge/Version-2.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
 
 Snicket Labs Platform Self Hosted
 
@@ -405,7 +405,7 @@ Platform provides two types of autoscaled workers:
 - Can process MULTIPLE queues per worker with configurable concurrency
 - Scales between minReplicaCount and maxReplicaCount based on aggregate queue depth
 
-Initial autoscaling configurations for different deployment sizes can be found in the `environment-sizes/` directory (e.g., `environment-sizes/small/small.yaml`).
+The chart ships a single set of autoscaling defaults in `values.yaml`. Pods scale to demand, bounded by each worker's `maxReplicaCount`, by `materialProcessingCount`, and by what your cluster can schedule. Raise a ceiling in `your-custom-values.yaml` if a workload needs it — see [Sizing the Workloads](#sizing-the-workloads).
 
 ### Upgrades and field conflicts
 
@@ -450,50 +450,6 @@ rather than `0.75`.
 This is a known upstream issue in KEDA
 ([kedacore/keda#7306](https://github.com/kedacore/keda/issues/7306)) and is not
 specific to this chart.
-
-### Values File Merging
-
-This chart uses **Helm's deep merge** feature to combine multiple values files. When you deploy with multiple `-f` flags:
-
-```bash
-helm install ... --values your-custom-values.yaml -f environment-sizes/small/small.yaml
-```
-
-Helm merges the values files from left to right, where each file can override specific fields from previous files. The key behavior:
-
-- **Deep merge for objects/maps**: Only the specific fields you define in later files are overridden; all other fields are preserved
-- **Complete replacement for arrays**: Lists are replaced entirely, not merged
-
-**Example**: The base `values.yaml` defines complete scaledJob configurations including resources, queues, timeouts, and `maxReplicaCount`. Environment-specific files (like `environment-sizes/small/small.yaml`) override **only** the `maxReplicaCount` field:
-
-```yaml
-# values.yaml (base configuration)
-scaledJobs:
-  ingest-proxy-generate:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 1280Mi
-        cpu: "2"
-      limits:
-        cpu: "6"
-        memory: 4Gi
-    queue: proxy_generate_tasks
-    activeDeadlineSeconds: 5400
-
-# environment-sizes/medium/medium.yaml (override)
-scaledJobs:
-  ingest-proxy-generate:
-    maxReplicaCount: 10  # Override only this field
-
-# Result after merge: maxReplicaCount is 10, all other fields preserved from values.yaml
-```
-
-This allows environment-specific files to adjust scaling limits without duplicating resource allocations, queue configurations, or other settings. The sizing multipliers are:
-- **small.yaml**: 1x baseline (matches `values.yaml` defaults)
-- **medium.yaml**: 2x baseline
-- **large.yaml**: 3x baseline
 
 ## Fingerprinting Resource Tuning
 
@@ -996,7 +952,19 @@ owningUser:
 
 ## Sizing the Workloads
 
-The folder `environment-sizes` contains a set of example size files for different environments. These can be used to size the workloads to your environment's needs. These roughly correlate with common cloud instance sizes (4xlarge, etc).
+Node pools autoscale and the application scales its workers to demand. The two values
+that bound throughput are:
+
+- **`materialProcessingCount`** (default `"default=5"`) — how many materials the application
+  admits for processing at once.
+- **`maxReplicaCount`** on each scaledJob and scaledObject — how far that worker may scale.
+
+They ship aligned, at five materials in and five slots at each stage, so no single stage is
+the bottleneck by default. Raise both together in `your-custom-values.yaml` if you want more
+throughput and have the cluster capacity for it; raising one alone will not help.
+
+How much either costs you depends on your content, library size, comparison types and which
+features you use, which is why the chart does not guess on your behalf.
 
 > Please consult with Snicket Labs technical services for sizing recommendations.
 
@@ -1295,13 +1263,11 @@ helm install oci://registry.snicketlabs.io/snicketlabs/platform-chart/platform \
   --namespace snicketlabs \
   --generate-name \
   --create-namespace \
-  --values your-custom-values.yaml -f environment-sizes/{SIZE}.yaml \
+  --values your-custom-values.yaml \
   --wait --wait-for-jobs --timeout 15m
 ```
 
 `--wait --wait-for-jobs` makes `helm install` report a failure if the database preparation Job (schema, seeds, KEDA role) or the application doesn't come up, instead of returning as soon as the resources are created. Allow enough `--timeout` for Postgres to start and the schema to load; on a failure Helm reports when the timeout runs out, while the Job itself (`app.kubernetes.io/component: db-prepare-initial`) shows as failed after a few attempts.
-
-> **Note**: The multiple `-f` flags apply values files in order using Helm's deep merge. The environment size file (e.g., `environment-sizes/small/small.yaml`) overrides only the `maxReplicaCount` scaling limits from `values.yaml`. All other configurations (resources, queues, timeouts) are preserved from the base values. See [Values File Merging](#values-file-merging) for details.
 
 ### Retrieving the Initial Password
 
@@ -1516,7 +1482,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.dv-matchcore.activeDeadlineSeconds | int | `7200` |  |
 | scaledJobs.dv-matchcore.enabled | bool | `true` |  |
 | scaledJobs.dv-matchcore.matchcoreThreads | int | `4` |  |
-| scaledJobs.dv-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.dv-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.dv-matchcore.queue | string | `"dv_matchcore"` |  |
 | scaledJobs.dv-matchcore.resources.limits.cpu | string | `"4"` |  |
 | scaledJobs.dv-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
@@ -1527,7 +1493,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.hd-matchcore.activeDeadlineSeconds | int | `7200` |  |
 | scaledJobs.hd-matchcore.enabled | bool | `true` |  |
 | scaledJobs.hd-matchcore.matchcoreThreads | int | `8` |  |
-| scaledJobs.hd-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.hd-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.hd-matchcore.queue | string | `"hd_matchcore"` |  |
 | scaledJobs.hd-matchcore.resources.limits.cpu | string | `"8"` |  |
 | scaledJobs.hd-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
@@ -1594,7 +1560,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.interlaced-matchcore.activeDeadlineSeconds | int | `7200` |  |
 | scaledJobs.interlaced-matchcore.enabled | bool | `true` |  |
 | scaledJobs.interlaced-matchcore.matchcoreThreads | int | `4` |  |
-| scaledJobs.interlaced-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.interlaced-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.interlaced-matchcore.queue | string | `"interlaced_matchcore"` |  |
 | scaledJobs.interlaced-matchcore.resources.limits.cpu | string | `"8"` |  |
 | scaledJobs.interlaced-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
@@ -1605,7 +1571,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.j2k-hd-matchcore.activeDeadlineSeconds | int | `14400` |  |
 | scaledJobs.j2k-hd-matchcore.enabled | bool | `true` |  |
 | scaledJobs.j2k-hd-matchcore.matchcoreThreads | int | `8` |  |
-| scaledJobs.j2k-hd-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.j2k-hd-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.j2k-hd-matchcore.queue | string | `"j2k_hd_matchcore"` |  |
 | scaledJobs.j2k-hd-matchcore.resources.limits.cpu | string | `"8"` |  |
 | scaledJobs.j2k-hd-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
@@ -1725,7 +1691,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.tiff-sequence-matchcore.imageSequence.bufferMegabytes | int | `640` |  |
 | scaledJobs.tiff-sequence-matchcore.imageSequence.downloadThreads | int | `8` |  |
 | scaledJobs.tiff-sequence-matchcore.matchcoreThreads | int | `8` |  |
-| scaledJobs.tiff-sequence-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.tiff-sequence-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.tiff-sequence-matchcore.queue | string | `"tiff_sequence_matchcore"` |  |
 | scaledJobs.tiff-sequence-matchcore.resources.limits.cpu | string | `"8"` |  |
 | scaledJobs.tiff-sequence-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
@@ -1736,7 +1702,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.uhd-matchcore.activeDeadlineSeconds | int | `28800` |  |
 | scaledJobs.uhd-matchcore.enabled | bool | `true` |  |
 | scaledJobs.uhd-matchcore.matchcoreThreads | int | `8` |  |
-| scaledJobs.uhd-matchcore.maxReplicaCount | int | `2` |  |
+| scaledJobs.uhd-matchcore.maxReplicaCount | int | `5` |  |
 | scaledJobs.uhd-matchcore.queue | string | `"uhd_matchcore"` |  |
 | scaledJobs.uhd-matchcore.resources.limits.cpu | string | `"8"` |  |
 | scaledJobs.uhd-matchcore.resources.limits.ephemeral-storage | string | `"4Gi"` |  |
