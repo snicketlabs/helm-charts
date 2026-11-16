@@ -258,9 +258,10 @@ railsConsole:
 # Use for multi-queue workers that benefit from dynamic scaling based on queue depth
 # Each worker can consume multiple queues and will scale between min/max replicas
 #
-# NOTE: These are base/default configurations. Environment-specific files in environment-sizes/
-# override ONLY the maxReplicaCount values using Helm's deep merge. All other settings
-# (resources, queues, timeouts, etc.) remain as defined here unless explicitly overridden.
+# NOTE: maxReplicaCount here is the single shipped default. There are no size
+# profiles -- the chart scales pods to demand, bounded by maxReplicaCount,
+# materialProcessingCount and what the cluster can schedule. Override per
+# deployment with your own values file if a workload needs a different ceiling.
 scaledObjects:
   generic:
     minReplicaCount: 1
@@ -294,9 +295,10 @@ scaledObjects:
 # Jobs are created on-demand when queue has items and terminated after completion
 # Each job pod runs exactly one task (GoodJob concurrency 1)
 #
-# NOTE: These are base/default configurations. Environment-specific files in environment-sizes/
-# override ONLY the maxReplicaCount values using Helm's deep merge. All other settings
-# (resources, queues, timeouts, etc.) remain as defined here unless explicitly overridden.
+# NOTE: maxReplicaCount here is the single shipped default. There are no size
+# profiles -- the chart scales pods to demand, bounded by maxReplicaCount,
+# materialProcessingCount and what the cluster can schedule. Override per
+# deployment with your own values file if a workload needs a different ceiling.
 #
 # IMPORTANT — write every cpu/memory quantity in its CANONICAL form.
 #
@@ -344,7 +346,7 @@ scaledJobs:
   # tmpStorage emptyDir is unmetered node disk. See internal/SIZING.md.
   dv-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "2"
@@ -372,7 +374,7 @@ scaledJobs:
   # did nothing. Threads stay at 4, VC-3's best in the codec sweep.
   interlaced-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "6"
@@ -387,7 +389,7 @@ scaledJobs:
     activeDeadlineSeconds: 7200
   hd-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "5"
@@ -402,7 +404,7 @@ scaledJobs:
     activeDeadlineSeconds: 7200
   uhd-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "6"
@@ -450,7 +452,7 @@ scaledJobs:
   # 8Gi. Keep the queue name; change the numbers.
   tiff-sequence-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "4"
@@ -474,7 +476,7 @@ scaledJobs:
   # See internal/SIZING.md, "JPEG 2000 tiers".
   j2k-hd-matchcore:
     enabled: true
-    maxReplicaCount: 2
+    maxReplicaCount: 5
     resources:
       requests:
         cpu: "8"
