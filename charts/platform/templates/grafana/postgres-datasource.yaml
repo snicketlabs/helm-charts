@@ -1,4 +1,24 @@
-{{- if and .Values.monitoring.postgresDashboards (default false .Values.monitoring.postgresDashboards.enabled) }}
+{{- if include "platform.postgresDashboardsEnabled" . }}
+{{- /*
+Grafana's Postgres datasource, pointed at the KEDA read-only role.
+
+It deliberately does NOT use the application's own database credentials. The
+datasource runs whatever SQL a Grafana user types into Explore, so handing it
+the app's role would make a dashboard UI a route to writing to the production
+database. db_grafana_ro has SELECT on good_jobs, good_job_processes, jobs, ingest_masters
+and materials -- what the job dashboards read, and nothing else
+(platform.grafanaPostgresRoleScript). It is deliberately not KEDA's role: that
+one is named for its consumer, wants fewer tables, and having dashboards quietly
+depend on it is how this went wrong the first time.
+
+Host, port, database and user render from values, so the only thing that has to
+reach Grafana as a file is the password -- mount the KEDA role Secret
+(platform.kedaPostgresRoleSecretName), which holds nothing else. See
+docs/README.md for the Grafana values.
+
+With monitoring.postgresDashboards.autoCreateRole false the role is yours to
+create; grant it SELECT on those tables and mount its password the same way.
+*/}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -14,11 +34,11 @@ stringData:
         type: postgres
         access: proxy
         isDefault: false
+        url: {{ include "platform.kedaPostgresHost" . }}:{{ .Values.kedaAutoScaling.postgres.port | default 5432 }}
+        user: {{ (.Values.monitoring.postgresDashboards | default dict).roleName | default "db_grafana_ro" }}
         jsonData:
-          sslmode: require
-          database: $__file{/etc/secrets/db_name}
+          sslmode: {{ .Values.kedaAutoScaling.postgres.sslmode | default "require" }}
+          database: {{ .Values.kedaAutoScaling.postgres.dbName | default .Values.postgres.auth.database }}
         secureJsonData:
           password: $__file{/etc/secrets/password}
-        url: $__file{/etc/secrets/host}:$__file{/etc/secrets/port}
-        user: $__file{/etc/secrets/username}
 {{- end }}

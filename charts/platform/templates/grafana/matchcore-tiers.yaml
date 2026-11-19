@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.matchDashboards (default false .Values.monitoring.matchDashboards.enabled) }}
+{{- if include "platform.matchDashboardsEnabled" . }}
 {{- /* Long-lived worker container in a matchcore job pod. Those tiers render a
        single Ruby container from the main image. */ -}}
 {{- $workerContainer := "good-job" }}

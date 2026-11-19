@@ -1,0 +1,5 @@
+{{- /* ScaledJob pods are one-shot, so only Deployments get a PDB. */ -}}
+{{- include "platform.podDisruptionBudget" (dict "ctx" . "name" (printf "web-%s" (include "platform.fullname" .)) "component" "web" "pdb" .Values.webServers.pdb) }}
+{{- range $name, $worker := .Values.scaledObjects }}
+{{- include "platform.podDisruptionBudget" (dict "ctx" $ "name" (printf "%s-worker-%s" $name (include "platform.fullname" $)) "component" (printf "%s-worker" $name) "pdb" $worker.pdb) }}
+{{- end }}

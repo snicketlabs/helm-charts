@@ -280,11 +280,48 @@ half-migrated, and the KEDA Jobs could run before the tables they grant on.
   {{- if include "platform.kedaAutoCreateRole" . }}
   {{- include "platform.kedaPostgresRoleScript" . | nindent 2 }}
   {{- end }}
+  {{- if include "platform.grafanaAutoCreateRole" . }}
+  {{- include "platform.grafanaPostgresRoleScript" . | nindent 2 }}
+  {{- end }}
 {{- end }}
 
 {{- define "platform.kedaAutoCreateRole" -}}
 {{- if .Values.kedaAutoScaling.postgres.autoCreateRole -}}
 true
+{{- end }}
+{{- end }}
+
+{{- define "platform.grafanaPostgresRoleSecretName" -}}
+{{- printf "%s-grafana-postgres-ro" (include "platform.fullname" .) -}}
+{{- end }}
+
+{{/* Same lookup-or-generate as the KEDA role, so the password is stable across upgrades. */}}
+{{- define "platform.grafanaPostgresRolePassword" -}}
+{{- $secretName := include "platform.grafanaPostgresRoleSecretName" . }}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- if $existingSecret }}
+{{- index $existingSecret.data "password" | b64dec }}
+{{- else }}
+{{- (printf "%s%s%s%s%s" (randAlpha 12) (randAlpha 8 | upper) (randNumeric 6) "!@#" (randAlpha 4)) | shuffle }}
+{{- end }}
+{{- end }}
+
+{{/* Only wanted where the datasource exists, and only if we are creating roles. */}}
+{{- define "platform.grafanaAutoCreateRole" -}}
+{{- if and (include "platform.postgresDashboardsEnabled" .) (.Values.monitoring.postgresDashboards | default dict).autoCreateRole -}}
+true
+{{- end }}
+{{- end }}
+
+{{- define "platform.grafanaPostgresRoleEnv" -}}
+{{- if include "platform.grafanaAutoCreateRole" . }}
+- name: GRAFANA_RO_ROLE_NAME
+  value: {{ (.Values.monitoring.postgresDashboards | default dict).roleName | default "db_grafana_ro" }}
+- name: GRAFANA_RO_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "platform.grafanaPostgresRoleSecretName" . }}
+      key: password
 {{- end }}
 {{- end }}
 
@@ -321,14 +358,15 @@ after the schema is loaded or migrated (platform.dbPrepareCommand), so a
 missing table means an image without GoodJob, and passing would leave KEDA
 silently unable to scale.
 */}}
-{{- define "platform.kedaPostgresRoleScript" -}}
+{{- define "platform.postgresRoleScript" -}}
+{{- $tables := .tables -}}
 conn = ActiveRecord::Base.connection
-role = ENV.fetch("KEDA_RO_ROLE_NAME")
-password = ENV.fetch("KEDA_RO_PASSWORD")
+role = ENV.fetch("{{ .roleEnv }}")
+password = ENV.fetch("{{ .passwordEnv }}")
 db_name = ENV.fetch("DB_DATABASE")
 missing_tables = []
 begin
-  conn.execute("SELECT pg_advisory_lock(hashtext('keda_ro_role_setup'))")
+  conn.execute("SELECT pg_advisory_lock(hashtext('{{ .lockKey }}'))")
   exists = conn.select_value("SELECT 1 FROM pg_roles WHERE rolname = #{conn.quote(role)}")
   if exists
     conn.execute("ALTER ROLE #{conn.quote_table_name(role)} PASSWORD #{conn.quote(password)}")
@@ -337,8 +375,7 @@ begin
   end
   conn.execute("GRANT CONNECT ON DATABASE #{conn.quote_table_name(db_name)} TO #{conn.quote_table_name(role)}")
   conn.execute("GRANT USAGE ON SCHEMA public TO #{conn.quote_table_name(role)}")
-  # good_job_processes is read by the ScaledJob trigger to spot jobs orphaned by a dead process (sc-24514).
-  %w[good_jobs good_job_processes].each do |table|
+  %w[{{ join " " $tables }}].each do |table|
     begin
       conn.execute("GRANT SELECT ON #{table} TO #{conn.quote_table_name(role)}")
     rescue => e
@@ -350,17 +387,61 @@ begin
       end
     end
   end
-  puts "KEDA read-only role '#{role}' is ready." if missing_tables.empty?
+  puts "{{ .purpose }} read-only role '#{role}' is ready." if missing_tables.empty?
 rescue => e
-  warn "WARNING: could not create/configure the KEDA read-only Postgres role automatically: #{e.message}"
-  warn "GoodJob KEDA autoscaling will not work until this is created manually - see docs/README.md (Manual KEDA role setup)."
+  warn "WARNING: could not create/configure the {{ .purpose }} read-only Postgres role automatically: #{e.message}"
+  warn "{{ .consequence }} - see docs/README.md (Manual role setup)."
 ensure
-  conn.execute("SELECT pg_advisory_unlock(hashtext('keda_ro_role_setup'))") rescue nil
+  conn.execute("SELECT pg_advisory_unlock(hashtext('{{ .lockKey }}'))") rescue nil
 end
 unless missing_tables.empty?
+{{- if .failOnMissing }}
   warn "ERROR: cannot grant SELECT on #{missing_tables.join(', ')}: table does not exist. The schema is loaded before this runs, so the image may not include GoodJob."
   exit 1
+{{- else }}
+  warn "WARNING: cannot grant SELECT on #{missing_tables.join(', ')}: table does not exist. Panels reading them will show a permissions error; everything else still works."
+{{- end }}
 end
+{{- end }}
+
+{{/*
+KEDA's read-only role. Fails the Job on a missing table: it runs right after the
+schema is loaded, so absent good_jobs means an image without GoodJob, and passing
+would leave KEDA silently unable to scale.
+*/}}
+{{- define "platform.kedaPostgresRoleScript" -}}
+{{- include "platform.postgresRoleScript" (dict
+      "roleEnv" "KEDA_RO_ROLE_NAME"
+      "passwordEnv" "KEDA_RO_PASSWORD"
+      "tables" (list "good_jobs" "good_job_processes")
+      "lockKey" "keda_ro_role_setup"
+      "purpose" "KEDA"
+      "consequence" "GoodJob KEDA autoscaling will not work until this is created manually"
+      "failOnMissing" true) -}}
+{{- end }}
+
+{{/*
+Grafana's read-only role, for the Postgres datasource behind
+monitoring.postgresDashboards. Separate from KEDA's on purpose: the two want
+different tables, and a role named for one consumer being quietly relied on by
+another is how the KEDA role ended up with dashboards depending on it (sc-25626).
+
+The extra three tables are what the MatchCore tier dashboards join to name the
+material behind a job. Read-only on five tables is still far short of the
+application's own user, which is what this datasource used to run as.
+
+Does NOT fail the Job on a missing table: a dashboard panel short of a grant is
+not a reason to fail someone's install or upgrade.
+*/}}
+{{- define "platform.grafanaPostgresRoleScript" -}}
+{{- include "platform.postgresRoleScript" (dict
+      "roleEnv" "GRAFANA_RO_ROLE_NAME"
+      "passwordEnv" "GRAFANA_RO_PASSWORD"
+      "tables" (list "good_jobs" "good_job_processes" "jobs" "ingest_masters" "materials")
+      "lockKey" "grafana_ro_role_setup"
+      "purpose" "Grafana"
+      "consequence" "The Postgres dashboards will not be able to query until this is created manually"
+      "failOnMissing" false) -}}
 {{- end }}
 
 {{/*
@@ -376,4 +457,82 @@ Takes: kind (values section), name (entry key), values (the entry).
 {{- fail (printf "%s.%s.%s was renamed to %s when the chart dropped Sidekiq; rename it in your values (see UPGRADING.md)" $.kind $.name $old (get $renamed $old)) -}}
 {{- end -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+Dashboard enablement.
+
+Monitoring has too many switches. These let `monitoring.enabled: true` be the
+only thing most people set: leave a dashboard flag unset and it follows the
+monitoring stack, set it explicitly and you get exactly that.
+
+The datasource dashboards cannot simply default on, because a Grafana we do not
+install is one we cannot wire. Grafana resolves $__file{} at startup and a
+datasource it cannot provision stops it coming up, so rendering a Postgres
+datasource into someone else's Grafana breaks it. Two conditions have to hold
+before we turn it on by ourselves:
+
+  - we install Grafana, so the password mount is ours to set
+    (kube-prometheus-stack.grafana.extraSecretMounts, defaulted in values.yaml)
+  - the role's Secret exists, which means autoCreateRole
+
+Explicit true still works for a Grafana you run yourself. You own the mount.
+*/}}
+{{- define "platform.bundledGrafana" -}}
+{{- $kps := (index .Values "kube-prometheus-stack") | default dict -}}
+{{- $grafana := $kps.grafana | default dict -}}
+{{- $grafanaOn := true -}}
+{{- if hasKey $grafana "enabled" -}}{{- $grafanaOn = $grafana.enabled -}}{{- end -}}
+{{- if and .Values.monitoring.enabled $grafanaOn -}}true{{- end -}}
+{{- end }}
+
+{{/* Unset follows monitoring.enabled; explicit wins either way. */}}
+{{- define "platform.dashboardsEnabled" -}}
+{{- $v := (.Values.monitoring.dashboards | default dict).enabled -}}
+{{- if kindIs "invalid" $v -}}
+{{- include "platform.bundledGrafana" . -}}
+{{- else if $v -}}true{{- end -}}
+{{- end }}
+
+{{/* Also needs a password we can actually supply. */}}
+{{- define "platform.postgresDashboardsEnabled" -}}
+{{- $v := (.Values.monitoring.postgresDashboards | default dict).enabled -}}
+{{- if kindIs "invalid" $v -}}
+{{- if and (include "platform.bundledGrafana" .) .Values.kedaAutoScaling.postgres.autoCreateRole -}}true{{- end -}}
+{{- else if $v -}}true{{- end -}}
+{{- end }}
+
+{{/* Its job tables read through the Postgres datasource, so it follows that. */}}
+{{- define "platform.matchDashboardsEnabled" -}}
+{{- $v := (.Values.monitoring.matchDashboards | default dict).enabled -}}
+{{- if kindIs "invalid" $v -}}
+{{- include "platform.postgresDashboardsEnabled" . -}}
+{{- else if $v -}}true{{- end -}}
+{{- end }}
+
+{{/* PDB for a chart Deployment. Args: ctx, name, component (selector label), pdb (values block). */}}
+{{- define "platform.podDisruptionBudget" -}}
+{{- $pdb := .pdb | default dict -}}
+{{- if $pdb.enabled }}
+{{- if and (hasKey $pdb "minAvailable") (hasKey $pdb "maxUnavailable") -}}
+{{- fail (printf "%s: set only one of pdb.minAvailable and pdb.maxUnavailable" .name) -}}
+{{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "platform.labels" .ctx | nindent 4 }}
+spec:
+  {{- if hasKey $pdb "minAvailable" }}
+  minAvailable: {{ $pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $pdb.maxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" .ctx | nindent 6 }}
+      app.kubernetes.io/component: {{ .component }}
+{{- end }}
 {{- end }}

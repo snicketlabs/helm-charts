@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.dashboards (default false .Values.monitoring.dashboards.enabled) }}
+{{- if include "platform.dashboardsEnabled" . }}
 {{- /* Long-lived worker container and the label shown for it. */ -}}
 {{- $workerContainer := "good-job" }}
 {{- $workerLabel := "GoodJob" }}
@@ -117,14 +117,15 @@ data:
           "pluginVersion": "12.3.0",
           "targets": [
             {
-              "editorMode": "builder",
-              "expr": "sidekiq_jobs_waiting_count{namespace=\"{{ .Release.Namespace }}\"}",
-              "legendFormat": "{{ `{{` }} queue }} ",
+              "editorMode": "code",
+              "expr": "max by (scaledObject) (keda_scaler_metrics_value{exported_namespace=\"{{ .Release.Namespace }}\", scaler=\"postgreSQLScaler\"})",
+              "legendFormat": "{{ `{{` }} scaledObject }}",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "SideKiq Queues",
+          "description": "Jobs waiting on each queue, unclaimed, from KEDA's own scaler. Every worker scales on a count of runnable rows in good_jobs, so the scaler's value is the queue depth. Covers scaledJobs as well as scaledObjects.\n\nNeeds Prometheus to be scraping keda-operator -- see the chart docs. Empty here means that scrape is missing, not that the queues are.\n\nDepth alone does not separate a deep queue that is draining from one that is stuck. The Postgres dashboard carries the age of the oldest waiting job, which does.",
+          "title": "Queue depth (KEDA)",
           "type": "timeseries"
         },
         {

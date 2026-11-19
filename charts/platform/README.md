@@ -5,7 +5,7 @@ status: 2
 -->
 <!-- AUTO-GENERATED — do not edit. Source: docs/README.md + README-generated.md.gotmpl. Regenerate with: make docs -->
 
-![Version: 2.0.0](https://img.shields.io/badge/Version-2.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
+![Version: 2.3.1](https://img.shields.io/badge/Version-2.3.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
 
 Snicket Labs Platform Self Hosted
 
@@ -30,7 +30,8 @@ A Kubernetes cluster (1.32+) with [KEDA](https://keda.sh/) installed, Helm 3.16+
 
 KEDA is a hard requirement, not an option. Every worker in this chart is a KEDA
 ScaledObject or ScaledJob; there is no static Deployment fallback. Install it
-before the first deploy — see [KEDA Autoscaling](#keda-autoscaling) below.
+before the first deploy — see [KEDA Autoscaling](#keda-autoscaling) below, which
+also covers scraping KEDA's metrics, the chart's only source of queue depth.
 
 ### Scratch Storage (/tmp)
 
@@ -305,6 +306,34 @@ postgres:
 `dbPrimaryHostSecret` hides the host from the chart at render time, and KEDA
 needs a literal one — set `kedaAutoScaling.postgres.host` as well when you use it.
 
+## Database roles this chart creates
+
+The chart creates two **read-only** Postgres roles. Neither can write, and neither
+is the application's own database user. If you are reviewing what this chart does
+to your database, this is the whole list.
+
+| Role | Used by | `SELECT` on | Turn off with |
+|---|---|---|---|
+| `db_keda_ro` | KEDA's scalers, to read queue depth | `good_jobs`, `good_job_processes` | `kedaAutoScaling.postgres.autoCreateRole: false` |
+| `db_grafana_ro` | Grafana's Postgres datasource | the above plus `jobs`, `ingest_masters`, `materials` | `monitoring.postgresDashboards.autoCreateRole: false` |
+
+Both are created and converged by the database preparation Job on every install
+and upgrade, each with its own generated password held in its own Secret. Rename
+either with the matching `roleName`.
+
+They are separate on purpose. The two want different tables, and a role named for
+one consumer being quietly relied on by another is how dashboards ended up
+depending on KEDA's grants.
+
+Neither is granted `pg_read_all_data`, `pg_monitor` or anything else broad. A
+table the chart cannot grant on never fails your install — KEDA's role is the one
+exception, because without `good_jobs` it cannot scale at all and silently not
+scaling is worse than failing.
+
+Setting either to `false` leaves that role to you; the `GRANT` statements are in
+[Manual setup](#keda-autoscaling) below and alongside the Grafana datasource.
+Nothing else in the chart touches database permissions.
+
 ## KEDA Autoscaling
 
 Platform uses [KEDA (Kubernetes Event Driven Autoscaling)](https://keda.sh/) to scale GoodJob workers on queue depth in Postgres, creating pods on demand when work is available and scaling to zero when queues are empty. All job processing runs this way. Without KEDA installed the install fails: the chart creates ScaledObject and ScaledJob resources, and the API server rejects them when the CRDs are absent.
@@ -324,6 +353,49 @@ helm install keda kedacore/keda --namespace keda --create-namespace
 ```
 
 Or follow the [KEDA installation documentation](https://keda.sh/docs/latest/deploy/).
+
+**Scrape KEDA's metrics if you want the dashboards**
+
+KEDA's operator exposes `keda_scaler_metrics_value` on port 8080, one series per
+trigger. Because every worker here scales on a Postgres query counting rows in
+`good_jobs`, that value *is* the queue depth for each queue — for ScaledJobs and
+ScaledObjects alike.
+
+This is the only queue-depth source the chart has, so if it is not scraped the
+pipeline dashboards have nothing to draw.
+
+KEDA's own chart can create the ServiceMonitor for you:
+
+```bash
+helm install keda kedacore/keda --namespace keda --create-namespace \
+  --set prometheus.operator.enabled=true \
+  --set prometheus.operator.serviceMonitor.enabled=true
+```
+
+**Both flags are needed.** `prometheus.operator.enabled` is what exposes the
+metrics; `serviceMonitor.enabled` only creates the object that scrapes them.
+Setting the second alone renders no ServiceMonitor at all, silently.
+
+Already running KEDA? Same two values on an upgrade:
+
+```bash
+helm upgrade keda kedacore/keda -n keda --reuse-values \
+  --set prometheus.operator.enabled=true \
+  --set prometheus.operator.serviceMonitor.enabled=true
+```
+
+With `monitoring.enabled`, the bundled Prometheus picks that up: this chart sets
+`serviceMonitorSelectorNilUsesHelmValues: false`, so Prometheus selects
+ServiceMonitors in any namespace rather than only ones carrying its own release
+label — which KEDA's, created by a different chart, does not.
+
+Running your own Prometheus instead? Make sure its ServiceMonitor selector
+reaches KEDA's namespace, or scrape the `keda-operator` Deployment directly on
+port 8080.
+
+One thing to know when writing your own queries against these series: KEDA's own
+namespace lands on the `namespace` label. The application's namespace arrives as
+`exported_namespace`.
 
 **Kubernetes Version**
 
@@ -354,6 +426,23 @@ KEDA polls the `good_jobs` table directly (via a `postgresql`-type trigger). Thi
 **Automatic setup (default: `kedaAutoScaling.postgres.autoCreateRole: true`)**
 
 The database preparation Job, on install and on every upgrade, also creates (or converges) a `db_keda_ro` role and grants it `SELECT` on `good_jobs` and `good_job_processes` only — never broader access like `pg_read_all_data`. The role's password is generated once and stored in a Secret that's stable across upgrades.
+
+Grafana's Postgres datasource gets its **own** role, `db_grafana_ro`, created by the same Job and in the same way. It holds `SELECT` on `good_jobs`, `good_job_processes`, `jobs`, `ingest_masters` and `materials` — the five tables the dashboards read — and nothing else.
+
+It is deliberately not KEDA's role. The two want different tables, and a role named for one consumer being quietly relied on by another is how dashboards ended up depending on KEDA's grants. Configure it under `monitoring.postgresDashboards.roleName` and `.autoCreateRole`.
+
+Either way the datasource never runs as the application's database user. It executes whatever SQL someone types into Explore, so it gets read-only access to the tables the dashboards need and no more.
+
+With `autoCreateRole: false` the role is yours to create:
+
+```sql
+CREATE ROLE db_grafana_ro LOGIN PASSWORD 'choose-a-strong-password';
+GRANT CONNECT ON DATABASE your_database_name TO db_grafana_ro;
+GRANT USAGE ON SCHEMA public TO db_grafana_ro;
+GRANT SELECT ON good_jobs, good_job_processes, jobs, ingest_masters, materials TO db_grafana_ro;
+```
+
+A table the chart cannot grant on never fails your install — it logs a warning and the panels reading that table show a permissions error.
 
 Permission problems never fail your install or upgrade: if your Postgres user doesn't have `CREATEROLE` (common if you supply your own Postgres — see below), the Job logs a warning and exits successfully. It does fail if `good_jobs` or `good_job_processes` doesn't exist after the schema is loaded, which usually means the application image doesn't include GoodJob. Check the database preparation Job's logs (`app.kubernetes.io/component: db-prepare-initial` on install, `db-prepare` on upgrades) if KEDA scaling doesn't come up — if it couldn't create the role automatically, use the manual setup below.
 
@@ -407,6 +496,77 @@ Platform provides two types of autoscaled workers:
 
 The chart ships a single set of autoscaling defaults in `values.yaml`. Pods scale to demand, bounded by each worker's `maxReplicaCount`, by `materialProcessingCount`, and by what your cluster can schedule. Raise a ceiling in `your-custom-values.yaml` if a workload needs it — see [Sizing the Workloads](#sizing-the-workloads).
 
+### Postgres panels fail behind a WAF
+
+If the Postgres panels error while everything else on the same dashboard loads,
+and the error text is an HTML block page rather than a database message, a web
+application firewall is eating the request.
+
+Grafana's Postgres datasource posts the literal SQL in the body of a request to
+`/api/ds/query`:
+
+```
+SELECT queue_name, ... FROM good_jobs WHERE finished_at IS NULL ...
+```
+
+Managed WAF rulesets match that as an SQL injection attempt and block it.
+Cloudflare returns its "Attention Required" page, with wording about *"submitting
+a certain word or phrase, a SQL command or malformed data"*. Grafana shows the
+whole page as the query error.
+
+Prometheus and CloudWatch panels are unaffected — their request bodies do not
+look like SQL — so the failure is selective in a way that points at the
+dashboards rather than at the proxy.
+
+**There is nothing to change in this chart.** Posting SQL is how the datasource
+works. Your options are:
+
+- Add a WAF bypass or exception for Grafana's `/api/ds/query` path.
+- Do not front Grafana with the WAF.
+- Reach Grafana without going through it, which is enough for a quick check:
+
+```bash
+kubectl port-forward -n <ns> svc/<release>-grafana 3000:80
+```
+
+Then browse `http://localhost:3000`. If you set `grafana.ini` `serve_from_sub_path`
+with a `root_url` ending in a path, append that path too.
+
+Checking from inside the cluster hides this entirely — a `kubectl exec ... curl
+localhost:3000` test passes while the browser fails, because only the browser
+goes through the proxy.
+
+### A datasource change that does not take effect
+
+Dashboards and datasources reload differently, and the difference is invisible
+until it bites:
+
+- **Dashboards poll.** The sidecar writes the file, Grafana's dashboard
+  provisioner rescans the directory on a timer and picks it up.
+- **Datasources do not.** Grafana reads them at startup, or when something calls
+  its admin provisioning API. The sidecar makes that call.
+
+So if the sidecar cannot authenticate to Grafana, dashboards keep updating while
+datasources silently stay as they were. New panels appear, pointed at an old
+datasource — which looks exactly like a chart that shipped a broken dashboard.
+
+The tell is in the Grafana pod logs:
+
+```
+POST /api/admin/provisioning/datasources/reload → 401
+error="[password-auth.failed] too many consecutive incorrect login attempts"
+```
+
+The usual cause is a Grafana admin password that no longer matches its database:
+Grafana applies the Secret's password only when it first creates its database.
+Reset it and restart:
+
+```bash
+PW=$(kubectl get secret <release>-grafana -n <ns> -o jsonpath='{.data.admin-password}' | base64 -d)
+kubectl exec -n <ns> deploy/<release>-grafana -c grafana -- grafana cli admin reset-admin-password "$PW"
+kubectl rollout restart -n <ns> deploy/<release>-grafana
+```
+
 ### Upgrades and field conflicts
 
 If an upgrade fails with an error like this, the cause is KEDA, not your values:
@@ -436,8 +596,15 @@ helm upgrade platform ... --force-conflicts
 
 This returns ownership of the contested fields to Helm and the upgrade
 proceeds. It is safe here: it asserts the values from your chart and values
-files, which is what you intended to deploy. Deploying through distr, the same
-option is available on the deployment rather than as a flag.
+files, which is what you intended to deploy.
+
+Deploying through distr, there is no flag to pass: tick **Force Conflicts** on
+the deployment before hitting update.
+
+The owner named in the error is not always `keda`. Deploying through distr it is
+usually `controller`, the agent's own field manager, and the fields are whichever
+ones your values change — a `maxReplicaCount` you raised, a secret mount you
+repointed. The cause and the fix are the same either way.
 
 The most common trigger is a resource quantity written in a form the Kubernetes
 API server rewrites when it stores the object, such as `4096Mi` (stored as
@@ -604,6 +771,128 @@ Before enabling monitoring, ensure you provide:
 - IAM roles and secrets for AWS integrations (CloudWatch, RDS, S3, etc.)
 - Secret management for sensitive credentials (e.g., database, SMTP)
 
+### Using the Kube Prometheus Stack this chart installs
+
+Set `monitoring.enabled: true` and you are done. It installs Prometheus,
+Grafana and the Operator CRDs, and our dashboards, alerts and data sources to monitor the platform:
+
+| | |
+|---|---|
+| Pipeline overview | queues, pod CPU and memory, OOM kills, throttling |
+| MatchCore tiers | per-tier wall time, CPU, throttling and memory against each envelope |
+| GoodJob tables | via a Postgres datasource, wired for you |
+
+The Postgres datasource uses the
+chart's own read-only role, `db_grafana_ro`, and the chart mounts that role's
+password into Grafana itself. There is no second flag and no secret to mount.
+
+To turn an individual dashboard off, set it to `false`:
+
+```yaml
+monitoring:
+  enabled: true
+  matchDashboards:
+    enabled: false
+```
+
+`monitoring.awsDashboards` is the exception and is always explicit — it assumes
+an IAM role, and there is no value worth guessing. See the CloudWatch section.
+
+### Is the database holding the pipeline up?
+
+`monitoring.awsDashboards` adds **Platform — database and throughput**, which
+puts RDS load next to the pipeline on one screen. Either half alone is
+ambiguous; together they separate a busy database from one that is the
+constraint:
+
+| What you see | What it means |
+|---|---|
+| Queue depth up, worker CPU up, database calm | Working as intended |
+| Queue depth up, worker CPU **low**, database CPU or latency up | The database is the constraint — step it up |
+| Queue depth up, worker CPU low, database also calm | Not the database. Look at `materialProcessingCount` and the scaledJob ceilings, or whether pods can be scheduled |
+| Connections flat at a ceiling | Raise `max_connections` or admit less work — more CPU will not help |
+
+The dashboard carries that table too, so it is there when you are looking at it
+rather than here.
+
+**This is AWS only**, because the database half is CloudWatch. On Cloud SQL or
+your own Postgres the dashboard does not render and the pairing has to be
+inferred from the pipeline side: the "Oldest waiting job by queue" panel on the
+Postgres dashboard, and the symptoms described under
+[Recognising a database that cannot keep up](#recognising-a-database-that-cannot-keep-up).
+
+The existing **AWS RDS** dashboard stays as the raw CloudWatch reference — every
+metric RDS emits. This one answers a single question.
+
+### Grafana admin password
+
+Generated on install and kept across upgrades:
+`kubectl get secret <release>-grafana -n <ns> -o jsonpath='{.data.admin-password}' | base64 -d`.
+`helm template` generates a new one on every render; point
+`kube-prometheus-stack.grafana.admin.existingSecret` at your own Secret instead.
+
+### Bringing your own Prometheus and Grafana
+
+The dashboards are plain ConfigMaps and Secrets labelled `grafana_dashboard` and
+`grafana_datasource`, so any Grafana running the standard sidecar picks them up.
+Nothing requires our Prometheus stack.
+
+If you bring your own grafana and prometheus stack you need to explicitly turn on dashboards:
+**nothing switches itself on**, because this chart cannot wire a Grafana it did
+not install.
+
+```yaml
+monitoring:
+  enabled: false
+  dashboards:
+    enabled: true        # pipeline overview
+  postgresDashboards:
+    enabled: true        # Postgres datasource + GoodJob tables
+                         # MatchCore tiers follow this one
+```
+
+> **The Postgres datasource is read-only SQL access to your database.** Queue
+> depth and job tables come from querying the application's database directly,
+> so anyone who can use Explore in your Grafana can run arbitrary `SELECT`
+> statements against the tables listed in
+> [Database roles this chart creates](#database-roles-this-chart-creates). It is
+> read-only and scoped to five tables, but it is still direct database access —
+> treat Grafana access accordingly.
+
+`matchDashboards` reads its job tables through the Postgres datasource, so it
+follows `postgresDashboards` and you do not need to name it. Setting
+`matchDashboards: true` **without** `postgresDashboards` renders the dashboard
+anyway — its Prometheus panels work and its two SQL panels stay empty.
+
+Then two things are yours to do:
+
+**1. Mount the Grafana role's password into your Grafana.** The datasource reads
+it with `$__file{/etc/secrets/password}`:
+
+```yaml
+extraSecretMounts:
+  - name: pg-secrets
+    secretName: platform-grafana-postgres-ro
+    mountPath: /etc/secrets
+    readOnly: true
+    optional: true
+    items:
+      - key: password
+        path: password
+```
+
+Grafana resolves `$__file{}` at startup and **will not start** with a datasource
+it cannot provision, so do this before enabling `postgresDashboards`, not after.
+
+If you run with `monitoring.postgresDashboards.autoCreateRole: false`, that
+Secret is yours to create too — see
+[Database roles this chart creates](#database-roles-this-chart-creates).
+
+**2. Make sure your Prometheus selects them.** Your `ServiceMonitor` and
+`PodMonitor` selectors have to reach this namespace, and KEDA's, for queue depth.
+The bundled stack sets `serviceMonitorSelectorNilUsesHelmValues: false` for
+exactly this reason.
+
 ### PodMonitor and ServiceMonitor
 
 The chart uses Prometheus PodMonitor and ServiceMonitor resources to automatically discover and scrape metrics from pods and services. This ensures metrics collection adapts as pods are created, scaled, or replaced, providing reliable observability for all workloads.
@@ -653,6 +942,9 @@ monitoring:
     cloudwatch:
       ## if you followed the reference architecture
       ## terraform the iam role pattern will be
+      ## Both are required when awsDashboards is enabled: the datasource
+      ## assumes this role to read CloudWatch, and without them the install
+      ## fails rather than producing a datasource that cannot connect.
       assumeRoleArn: arn:aws:iam::$YOUR_AWS_ACCOUNT_NUMBER_HERE$:role/$YOUR_CLUSTER_NAME_HERE-grafana-cloudwatch
       defaultRegion: us-east-1
   postgresDashboards:
@@ -675,9 +967,13 @@ kube-prometheus-stack:
     ## password to "prom-operator". Empty makes the grafana chart generate one,
     ## readable from the <release>-grafana Secret.
     adminPassword: ""
+    ## Grafana has a dedicated service account, optionally annotated with an
+    ## IAM role for AWS IRSA.
     serviceAccount:
-      create: false
-      name: platform
+      create: true
+      name: grafana
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::111122223333:role/my-grafana-role"
     ingress:
       enabled: true
       ingressClassName: $YOUR_INGRESS_CLASS_NAME_HERE
@@ -687,25 +983,22 @@ kube-prometheus-stack:
         - $YOUR_INGRESS_HOSTNAME_HERE
       paths:
         - /*
-    extraSecretMounts:
-      - name: pg-secrets
-        ## if you followed the reference architecture
-        ## terraform the secret name is
-        ## $YOUR_CLUSTER_NAME_HERE-rds-pg
-        secretName: $YOUR_SECRET_NAME_HERE
-        mountPath: /etc/secrets
-        readOnly: true
-        items:
-          - key: username
-            path: username
-          - key: password
-            path: password
-          - key: db_name
-            path: db_name
-          - key: host
-            path: host
-          - key: port
-            path: port
+    ## Nothing to add here for the Postgres datasource: the chart already
+    ## mounts the Grafana read-only role's password into Grafana for you,
+    ## since it creates that Secret itself.
+    ##
+    ## If you set extraSecretMounts for something else of your own, restate
+    ## that entry -- Helm replaces lists rather than merging them, and without
+    ## it Grafana cannot provision the datasource and will not start:
+    ##
+    ##   - name: pg-secrets
+    ##     secretName: platform-grafana-postgres-ro
+    ##     mountPath: /etc/secrets
+    ##     readOnly: true
+    ##     optional: true
+    ##     items:
+    ##       - key: password
+    ##         path: password
     ## if using loki for logging
     additionalDataSources:
       - name: Loki
@@ -967,6 +1260,57 @@ How much either costs you depends on your content, library size, comparison type
 features you use, which is why the chart does not guess on your behalf.
 
 > Please consult with Snicket Labs technical services for sizing recommendations.
+
+### Recognising a database that cannot keep up
+
+The database is usually what runs out first, and it rarely announces itself. The
+symptom is **material processing getting slower while the workers themselves are
+not busy**: jobs wait on the database, so wall times stretch while worker CPU
+stays low. Processing that has gradually slowed without the workers working
+harder is the signal to give the database more room.
+
+Judge it on throughput, not CPU alone. A database that is too small for the work
+*starves* the pipeline, and starvation reads as low CPU everywhere with long wall
+times — which looks much like an idle system until you notice how little is
+finishing.
+
+Two things that are **not** saturation on their own:
+
+- **A deep queue that is draining.** Depth tells you work arrived, not that
+  anything is stuck. Watch whether it clears.
+- **Brief CPU spikes.** Sustained pressure matters; momentary peaks do not.
+
+**If you have provider metrics** (CloudWatch for RDS, Cloud Monitoring for Cloud
+SQL), the things worth watching are sustained CPU, connection count against your
+connection limit, and read and write latency. Rising latency alongside flat
+throughput is the clearest version of the symptom above.
+
+**If you run your own Postgres**, you do not need provider metrics to see this.
+Postgres will tell you itself:
+
+```sql
+-- Sessions waiting rather than working. Growing and staying grown is the signal.
+SELECT wait_event_type, wait_event, count(*)
+FROM pg_stat_activity
+WHERE state = 'active'
+GROUP BY 1, 2 ORDER BY 3 DESC;
+
+-- Headroom on connections.
+SELECT count(*) AS in_use,
+       current_setting('max_connections')::int AS connection_limit
+FROM pg_stat_activity;
+```
+
+Climbing `wait_event_type = 'IO'` or `'LWLock'` under steady load points at the
+database rather than the application. Connections sitting near the limit cause
+the same slowdown for a different reason, and more CPU will not fix that one —
+raise `max_connections`, or reduce `materialProcessingCount` so less work is
+admitted at once.
+
+**If you are not running the monitoring in this chart at all**, the two values at
+the top of this section are still what bound throughput, and the symptom above is
+still what to look for. How you observe it is your choice: the dashboards here
+need Grafana and Prometheus, and nothing about the symptom requires either.
 
 ---
 
@@ -1400,7 +1744,20 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | kedaAutoScaling.postgres.port | int | `5432` |  |
 | kedaAutoScaling.postgres.roleName | string | `"db_keda_ro"` |  |
 | kedaAutoScaling.postgres.sslmode | string | `"require"` |  |
+| kube-prometheus-stack.grafana.adminPassword | string | `""` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].items[0].key | string | `"password"` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].items[0].path | string | `"password"` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].mountPath | string | `"/etc/secrets"` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].name | string | `"pg-secrets"` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].optional | bool | `true` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].readOnly | bool | `true` |  |
+| kube-prometheus-stack.grafana.extraSecretMounts[0].secretName | string | `"platform-grafana-postgres-ro"` |  |
+| kube-prometheus-stack.grafana.rbac.namespaced | bool | `true` |  |
+| kube-prometheus-stack.grafana.serviceAccount.annotations | object | `{}` |  |
+| kube-prometheus-stack.grafana.serviceAccount.create | bool | `true` |  |
+| kube-prometheus-stack.grafana.serviceAccount.name | string | `"grafana"` |  |
 | kube-prometheus-stack.prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues | bool | `false` |  |
+| kube-prometheus-stack.prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues | bool | `false` |  |
 | logLevel | string | `"info"` |  |
 | log_path | string | `"/app/log/production.log"` |  |
 | log_path_mode | string | `"0664"` |  |
@@ -1412,9 +1769,15 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | monitoring.alerts.enabled | bool | `false` |  |
 | monitoring.alerts.oomKilledWindow | string | `"15m"` |  |
 | monitoring.alerts.ruleLabels | object | `{}` |  |
-| monitoring.dashboards.enabled | bool | `false` |  |
+| monitoring.awsDashboards.cloudwatch.assumeRoleArn | string | `""` |  |
+| monitoring.awsDashboards.cloudwatch.defaultRegion | string | `""` |  |
+| monitoring.awsDashboards.enabled | bool | `false` |  |
+| monitoring.dashboards.enabled | string | `nil` |  |
 | monitoring.enabled | bool | `false` |  |
-| monitoring.matchDashboards.enabled | bool | `false` |  |
+| monitoring.matchDashboards.enabled | string | `nil` |  |
+| monitoring.postgresDashboards.autoCreateRole | bool | `true` |  |
+| monitoring.postgresDashboards.enabled | string | `nil` |  |
+| monitoring.postgresDashboards.roleName | string | `"db_grafana_ro"` |  |
 | nameOverride | string | `"platform"` |  |
 | nodeSelector | object | `{}` |  |
 | owningUser.email | string | `"admin@example.invalid"` |  |
@@ -1501,14 +1864,6 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.hd-matchcore.resources.requests.cpu | string | `"5"` |  |
 | scaledJobs.hd-matchcore.resources.requests.ephemeral-storage | string | `"1Gi"` |  |
 | scaledJobs.hd-matchcore.resources.requests.memory | string | `"3Gi"` |  |
-| scaledJobs.ingest-attach-image.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.ingest-attach-image.enabled | bool | `true` |  |
-| scaledJobs.ingest-attach-image.maxReplicaCount | int | `5` |  |
-| scaledJobs.ingest-attach-image.queue | string | `"video_match_frames_attach_image_tasks"` |  |
-| scaledJobs.ingest-attach-image.resources.limits.cpu | string | `"500m"` |  |
-| scaledJobs.ingest-attach-image.resources.limits.memory | string | `"820Mi"` |  |
-| scaledJobs.ingest-attach-image.resources.requests.cpu | string | `"500m"` |  |
-| scaledJobs.ingest-attach-image.resources.requests.memory | string | `"820Mi"` |  |
 | scaledJobs.ingest-download-media.activeDeadlineSeconds | int | `5400` |  |
 | scaledJobs.ingest-download-media.enabled | bool | `true` |  |
 | scaledJobs.ingest-download-media.maxReplicaCount | int | `5` |  |
@@ -1606,14 +1961,6 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.process-audio-insights.resources.limits.memory | string | `"2Gi"` |  |
 | scaledJobs.process-audio-insights.resources.requests.cpu | string | `"750m"` |  |
 | scaledJobs.process-audio-insights.resources.requests.memory | string | `"2Gi"` |  |
-| scaledJobs.process-compare-results.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.process-compare-results.enabled | bool | `true` |  |
-| scaledJobs.process-compare-results.maxReplicaCount | int | `5` |  |
-| scaledJobs.process-compare-results.queue | string | `"compare_materials_results"` |  |
-| scaledJobs.process-compare-results.resources.limits.cpu | string | `"750m"` |  |
-| scaledJobs.process-compare-results.resources.limits.memory | string | `"2Gi"` |  |
-| scaledJobs.process-compare-results.resources.requests.cpu | string | `"750m"` |  |
-| scaledJobs.process-compare-results.resources.requests.memory | string | `"2Gi"` |  |
 | scaledJobs.process-complete-materials.activeDeadlineSeconds | int | `600` |  |
 | scaledJobs.process-complete-materials.enabled | bool | `true` |  |
 | scaledJobs.process-complete-materials.maxReplicaCount | int | `5` |  |
@@ -1630,30 +1977,6 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.process-extract-frames.resources.limits.memory | string | `"1500Mi"` |  |
 | scaledJobs.process-extract-frames.resources.requests.cpu | string | `"1"` |  |
 | scaledJobs.process-extract-frames.resources.requests.memory | string | `"512Mi"` |  |
-| scaledJobs.process-extract.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.process-extract.enabled | bool | `true` |  |
-| scaledJobs.process-extract.maxReplicaCount | int | `5` |  |
-| scaledJobs.process-extract.queue | string | `"video_match_frames_extract_tasks"` |  |
-| scaledJobs.process-extract.resources.limits.cpu | string | `"2"` |  |
-| scaledJobs.process-extract.resources.limits.memory | string | `"2Gi"` |  |
-| scaledJobs.process-extract.resources.requests.cpu | string | `"750m"` |  |
-| scaledJobs.process-extract.resources.requests.memory | string | `"2Gi"` |  |
-| scaledJobs.process-frames.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.process-frames.enabled | bool | `true` |  |
-| scaledJobs.process-frames.maxReplicaCount | int | `5` |  |
-| scaledJobs.process-frames.queue | string | `"process_frames"` |  |
-| scaledJobs.process-frames.resources.limits.cpu | string | `"750m"` |  |
-| scaledJobs.process-frames.resources.limits.memory | string | `"2Gi"` |  |
-| scaledJobs.process-frames.resources.requests.cpu | string | `"750m"` |  |
-| scaledJobs.process-frames.resources.requests.memory | string | `"2Gi"` |  |
-| scaledJobs.process-ingest-frames.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.process-ingest-frames.enabled | bool | `true` |  |
-| scaledJobs.process-ingest-frames.maxReplicaCount | int | `5` |  |
-| scaledJobs.process-ingest-frames.queue | string | `"ingest_frames"` |  |
-| scaledJobs.process-ingest-frames.resources.limits.cpu | string | `"750m"` |  |
-| scaledJobs.process-ingest-frames.resources.limits.memory | string | `"2Gi"` |  |
-| scaledJobs.process-ingest-frames.resources.requests.cpu | string | `"750m"` |  |
-| scaledJobs.process-ingest-frames.resources.requests.memory | string | `"2Gi"` |  |
 | scaledJobs.process-sbf.activeDeadlineSeconds | int | `600` |  |
 | scaledJobs.process-sbf.enabled | bool | `true` |  |
 | scaledJobs.process-sbf.maxReplicaCount | int | `5` |  |
@@ -1678,14 +2001,6 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.process-unique-frames-groups.resources.limits.memory | string | `"2Gi"` |  |
 | scaledJobs.process-unique-frames-groups.resources.requests.cpu | string | `"750m"` |  |
 | scaledJobs.process-unique-frames-groups.resources.requests.memory | string | `"2Gi"` |  |
-| scaledJobs.process-video-fingerprint.activeDeadlineSeconds | int | `600` |  |
-| scaledJobs.process-video-fingerprint.enabled | bool | `true` |  |
-| scaledJobs.process-video-fingerprint.maxReplicaCount | int | `5` |  |
-| scaledJobs.process-video-fingerprint.queue | string | `"video_match_frames_fingerprint_tasks"` |  |
-| scaledJobs.process-video-fingerprint.resources.limits.cpu | string | `"750m"` |  |
-| scaledJobs.process-video-fingerprint.resources.limits.memory | string | `"2Gi"` |  |
-| scaledJobs.process-video-fingerprint.resources.requests.cpu | string | `"750m"` |  |
-| scaledJobs.process-video-fingerprint.resources.requests.memory | string | `"2Gi"` |  |
 | scaledJobs.tiff-sequence-matchcore.activeDeadlineSeconds | int | `28800` |  |
 | scaledJobs.tiff-sequence-matchcore.enabled | bool | `true` |  |
 | scaledJobs.tiff-sequence-matchcore.imageSequence.bufferMegabytes | int | `640` |  |
@@ -1714,7 +2029,8 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledObjects.generic.dbFollowerPoolSize | int | `10` |  |
 | scaledObjects.generic.dbPoolSize | int | `10` |  |
 | scaledObjects.generic.maxReplicaCount | int | `3` |  |
-| scaledObjects.generic.minReplicaCount | int | `1` |  |
+| scaledObjects.generic.minReplicaCount | int | `2` |  |
+| scaledObjects.generic.pdb.enabled | bool | `true` |  |
 | scaledObjects.generic.queues[0].name | string | `"default"` |  |
 | scaledObjects.generic.queues[0].priority | int | `1` |  |
 | scaledObjects.generic.queues[1].name | string | `"pipeline"` |  |
@@ -1752,10 +2068,11 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | volumeMounts | list | `[]` |  |
 | volumes | list | `[]` |  |
 | webServers.livenessProbe.timeoutSeconds | int | `5` |  |
+| webServers.pdb.enabled | bool | `true` |  |
 | webServers.port | int | `3000` |  |
 | webServers.railsMaxThreads | int | `15` |  |
 | webServers.readinessProbe.timeoutSeconds | int | `5` |  |
-| webServers.replicas | int | `1` |  |
+| webServers.replicas | int | `2` |  |
 | webServers.resources.limits.memory | string | `"1536Mi"` |  |
 | webServers.resources.requests.cpu | string | `"1"` |  |
 | webServers.resources.requests.memory | string | `"1Gi"` |  |

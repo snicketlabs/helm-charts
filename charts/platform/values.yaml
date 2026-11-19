@@ -230,7 +230,11 @@ metrics:
 
 webServers:
   port: 3000
-  replicas: 1
+  # 2 so a node drain or consolidation can evict one pod without an outage.
+  replicas: 2
+  # Renders maxUnavailable: 1 unless you set one of maxUnavailable/minAvailable; see UPGRADING.md for 1-replica caveats.
+  pdb:
+    enabled: true
   livenessProbe:
     timeoutSeconds: 5
   readinessProbe:
@@ -264,8 +268,12 @@ railsConsole:
 # deployment with your own values file if a workload needs a different ceiling.
 scaledObjects:
   generic:
-    minReplicaCount: 1
+    # 2 so a node drain never leaves the generic queues without a worker.
+    minReplicaCount: 2
     maxReplicaCount: 3
+    # Same as webServers.pdb; any scaledObject may set it.
+    pdb:
+      enabled: true
     concurrency: 10
     dbPoolSize: 10
     dbFollowerPoolSize: 10
@@ -519,18 +527,6 @@ scaledJobs:
         memory: 4Gi
     queue: proxy_generate_tasks
     activeDeadlineSeconds: 5400 # set to 90mins
-  ingest-attach-image:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 820Mi
-        cpu: "500m"
-      limits:
-        cpu: "500m"
-        memory: 820Mi
-    queue: video_match_frames_attach_image_tasks
-    activeDeadlineSeconds: 600
   ingest-process-materials:
     enabled: true
     maxReplicaCount: 5
@@ -638,18 +634,6 @@ scaledJobs:
         memory: 2Gi
     queue: complete_materials
     activeDeadlineSeconds: 600
-  process-compare-results:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 2Gi
-        cpu: "750m"
-      limits:
-        cpu: "750m"
-        memory: 2Gi
-    queue: compare_materials_results
-    activeDeadlineSeconds: 600
   process-audio-insights:
     enabled: true
     maxReplicaCount: 5
@@ -739,54 +723,6 @@ scaledJobs:
         memory: 1500Mi
     queue: video_match_frames_extract_frames_tasks
     activeDeadlineSeconds: 5400
-  process-extract:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 2Gi
-        cpu: "750m"
-      limits:
-        cpu: "2"
-        memory: 2Gi
-    queue: video_match_frames_extract_tasks
-    activeDeadlineSeconds: 600
-  process-video-fingerprint:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 2Gi
-        cpu: "750m"
-      limits:
-        cpu: "750m"
-        memory: 2Gi
-    queue: video_match_frames_fingerprint_tasks
-    activeDeadlineSeconds: 600
-  process-frames:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 2Gi
-        cpu: "750m"
-      limits:
-        cpu: "750m"
-        memory: 2Gi
-    queue: process_frames
-    activeDeadlineSeconds: 600
-  process-ingest-frames:
-    enabled: true
-    maxReplicaCount: 5
-    resources:
-      requests:
-        memory: 2Gi
-        cpu: "750m"
-      limits:
-        cpu: "750m"
-        memory: 2Gi
-    queue: ingest_frames
-    activeDeadlineSeconds: 600
   comparison-longform-data-generation:
     enabled: true
     maxReplicaCount: 6
@@ -958,16 +894,67 @@ s3:
 domain: snicketlabs.example.com
 
 monitoring:
+  # The one switch most deployments need. Installs the kube-prometheus-stack
+  # subchart (Prometheus, Grafana, the Operator CRDs), and every dashboard
+  # below follows it unless you say otherwise.
   enabled: false
+
+  # The three dashboard flags are unset rather than false on purpose: unset
+  # means "follow monitoring.enabled", so turning monitoring on gets you
+  # working dashboards without naming each one. Set true or false to override.
+  #
+  # The datasource-backed ones do not switch themselves on for a Grafana we did
+  # not install, because we cannot wire its password mount and Grafana will not
+  # start with a datasource it cannot provision. Running your own Grafana? Set
+  # them true deliberately and mount the password yourself -- docs/README.md.
+
+  # Pipeline overview: queues, pod CPU and memory, OOM kills, throttling.
   dashboards:
-    enabled: false
+    enabled:
   # Match-specific dashboards. Currently the per-tier view of the matchcore
   # fingerprinting jobs: what is running now and against which material, wall
   # time per minute of source, and the CPU, throttling and memory each tier
-  # actually uses against its envelope. Needs the Postgres datasource
-  # (monitoring.postgresDashboards) for the job tables.
+  # actually uses against its envelope. Reads the job tables through the
+  # Postgres datasource, so unset follows postgresDashboards.
   matchDashboards:
+    enabled:
+  # Postgres datasource and the GoodJob table dashboards. The datasource uses
+  # the KEDA read-only role (db_keda_ro), not the application's own database
+  # credentials -- Grafana's Postgres datasource runs arbitrary SQL from
+  # Explore.
+  #
+  # Unset turns this on only when we install Grafana AND
+  # kedaAutoScaling.postgres.autoCreateRole is on, which together mean the
+  # password exists and the mount is ours to make
+  # (kube-prometheus-stack.grafana.extraSecretMounts, below).
+  postgresDashboards:
+    enabled:
+    # The datasource's own read-only role, created and converged by the same
+    # database preparation Job as KEDA's. Deliberately separate from db_keda_ro:
+    # the two want different tables, and dashboards quietly depending on a role
+    # named for KEDA is how this went wrong the first time (sc-25626).
+    #
+    # Gets SELECT on good_jobs, good_job_processes, jobs, ingest_masters and
+    # materials -- what the dashboards read. Still far short of the application's
+    # own user, which is what this datasource used to run as.
+    #
+    # autoCreateRole false leaves the role to you; grant it SELECT on those
+    # tables and mount its password into Grafana yourself. A missing grant never
+    # fails the install, it just leaves those panels with a permissions error.
+    roleName: db_grafana_ro
+    autoCreateRole: true
+  # AWS CloudWatch datasource and the RDS dashboard. The datasource assumes an
+  # IAM role, so both values below are required when this is enabled -- with
+  # them unset the datasource renders an empty role ARN and silently fails to
+  # connect.
+  awsDashboards:
     enabled: false
+    cloudwatch:
+      # IAM role for Grafana to assume, e.g.
+      # arn:aws:iam::<account>:role/<cluster>-grafana-cloudwatch
+      assumeRoleArn: ""
+      # Region your RDS instance is in, e.g. eu-west-2
+      defaultRegion: ""
   # Prometheus alert rules, rendered as a PrometheusRule (needs the Prometheus
   # Operator CRDs: installed by monitoring.enabled, or bring your own).
   # PlatformTaskPodOOMKilled fires when a scaledJobs (oneAndDone) pod is killed
@@ -991,6 +978,55 @@ monitoring:
 # when monitoring.enabled (kube-prometheus-stack) and monitoring.logging.enabled
 # (loki-stack) are set. Nesting them under monitoring: is silently ignored.
 kube-prometheus-stack:
+  grafana:
+    # Empty, not omitted: omitting it inherits the published "prom-operator".
+    # Empty makes Grafana generate a password on install and keep it on upgrade.
+    # See "Grafana admin password" in docs/README.md.
+    adminPassword: ""
+
+    # Grafana's own service account, optionally annotated with a cloud identity
+    # (an IRSA role ARN on EKS). The name is fixed: a trust policy has to name
+    # system:serviceaccount:<namespace>:grafana before the release exists.
+    serviceAccount:
+      create: true
+      name: grafana
+      annotations: {}
+
+    # Namespaced RBAC: a Role in Grafana's namespace instead of a ClusterRole
+    # granting get/watch/list on configmaps and secrets in EVERY namespace,
+    # which is the subchart default. The sidecars only ever read this one
+    # namespace -- sidecar.*.searchNamespace is unset, so they default to their
+    # own -- so the cluster-wide grant was never used.
+    #
+    # Set this back to false if you point any sidecar.*.searchNamespace at
+    # another namespace; a namespaced Role cannot read it.
+    rbac:
+      namespaced: true
+
+    # Grafana's read-only role password, which the Postgres datasource reads
+    # with $__file{/etc/secrets/password} when monitoring.postgresDashboards is
+    # enabled. Defaulted so the bundled stack needs no manual wiring: the chart
+    # creates this Secret itself (monitoring.postgresDashboards.autoCreateRole).
+    #
+    # optional: true so the mount is harmless when the Secret is absent --
+    # autoCreateRole: false, where the role and its Secret are yours to make.
+    # Without it Grafana would sit in CreateContainerConfigError.
+    #
+    # Helm replaces lists rather than merging them: if you set extraSecretMounts
+    # yourself, restate this entry or the Postgres datasource loses its password
+    # and Grafana will not start with postgresDashboards enabled.
+    #
+    # Bringing your own Grafana? This does nothing for you -- mount it there
+    # yourself. See docs/README.md.
+    extraSecretMounts:
+      - name: pg-secrets
+        secretName: platform-grafana-postgres-ro
+        mountPath: /etc/secrets
+        readOnly: true
+        optional: true
+        items:
+          - key: password
+            path: password
   prometheus:
     prometheusSpec:
       # Scrape the chart's PodMonitors. With the subchart's default an empty
@@ -998,6 +1034,13 @@ kube-prometheus-stack:
       # PodMonitors do not carry, so metrics.enabled rendered PodMonitors that
       # nothing scraped.
       podMonitorSelectorNilUsesHelmValues: false
+      # Same again for ServiceMonitors, so KEDA's own ServiceMonitor is picked
+      # up. keda_scaler_metrics_value is the chart's only source of queue depth
+      # and KEDA is installed separately, so its ServiceMonitor is created by
+      # KEDA's chart (prometheus.operator.serviceMonitor.enabled) in KEDA's
+      # namespace and carries none of our release labels. Without this the
+      # pipeline dashboards are empty and nothing says why.
+      serviceMonitorSelectorNilUsesHelmValues: false
 
 materialProcessingPipelines: "default|duration>=0"
 materialProcessingCount: "default=5"
