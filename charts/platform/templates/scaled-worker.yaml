@@ -43,7 +43,10 @@ metadata:
 spec:
   strategy:
     type: {{ $.Values.workerDeploymentStrategy | default "RollingUpdate" }}
-  replicas: 1  # Managed by KEDA ScaledObject
+  {{- /* KEDA owns replicas; set it only on install so Helm never conflicts with KEDA's scale (Helm 4 server-side apply). */}}
+  {{- if $.Release.IsInstall }}
+  replicas: {{ $worker.minReplicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "platform.selectorLabels" $ | nindent 6 }}

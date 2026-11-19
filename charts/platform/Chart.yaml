@@ -2,7 +2,7 @@ apiVersion: v2
 name: platform
 description: Snicket Labs Platform Self Hosted
 home: https://snicketlabs.io
-version: 2.0.0
+version: 2.3.1
 maintainers:
   - name: Snicket Labs Platform
     email: platform@snicketlabs.io

@@ -194,7 +194,8 @@
         "livenessProbe": { "type": "object" },
         "readinessProbe": { "type": "object" },
         "railsMaxThreads": { "type": "integer", "minimum": 1 },
-        "resources": { "$ref": "#/definitions/resources" }
+        "resources": { "$ref": "#/definitions/resources" },
+        "pdb": { "$ref": "#/definitions/pdb" }
       }
     },
     "railsConsole": {
@@ -222,7 +223,6 @@
         "j2k-hd-matchcore",
         "j2k-uhd-matchcore",
         "ingest-proxy-generate",
-        "ingest-attach-image",
         "ingest-process-materials",
         "ingest-materials",
         "ingest-process-qc",
@@ -231,7 +231,6 @@
         "audiomatch-fingerprint",
         "compare-relate",
         "process-complete-materials",
-        "process-compare-results",
         "process-audio-insights",
         "process-ai-tagging",
         "process-unique-frames-groups",
@@ -239,10 +238,6 @@
         "compare-find-related",
         "process-sbf",
         "process-extract-frames",
-        "process-extract",
-        "process-video-fingerprint",
-        "process-frames",
-        "process-ingest-frames",
         "comparison-longform-data-generation"
       ],
       "properties": {
@@ -254,7 +249,7 @@
         "j2k-hd-matchcore": { "$ref": "#/definitions/scaledJob" },
         "j2k-uhd-matchcore": { "$ref": "#/definitions/scaledJob" },
         "ingest-proxy-generate": { "$ref": "#/definitions/scaledJob" },
-        "ingest-attach-image": { "$ref": "#/definitions/scaledJob" },
+        "ingest-attach-image": { "not": {}, "description": "Removed: nothing in the application enqueues to video_match_frames_attach_image_tasks any more. Delete this key; see UPGRADING.md." },
         "ingest-process-materials": { "$ref": "#/definitions/scaledJob" },
         "ingest-materials": { "$ref": "#/definitions/scaledJob" },
         "ingest-process-qc": { "$ref": "#/definitions/scaledJob" },
@@ -263,7 +258,7 @@
         "audiomatch-fingerprint": { "$ref": "#/definitions/scaledJob" },
         "compare-relate": { "$ref": "#/definitions/scaledJob" },
         "process-complete-materials": { "$ref": "#/definitions/scaledJob" },
-        "process-compare-results": { "$ref": "#/definitions/scaledJob" },
+        "process-compare-results": { "not": {}, "description": "Removed: nothing in the application enqueues to compare_materials_results any more. Delete this key; see UPGRADING.md." },
         "process-audio-insights": { "$ref": "#/definitions/scaledJob" },
         "process-ai-tagging": { "$ref": "#/definitions/scaledJob" },
         "process-unique-frames-groups": { "$ref": "#/definitions/scaledJob" },
@@ -271,10 +266,10 @@
         "compare-find-related": { "$ref": "#/definitions/scaledJob" },
         "process-sbf": { "$ref": "#/definitions/scaledJob" },
         "process-extract-frames": { "$ref": "#/definitions/scaledJob" },
-        "process-extract": { "$ref": "#/definitions/scaledJob" },
-        "process-video-fingerprint": { "$ref": "#/definitions/scaledJob" },
-        "process-frames": { "$ref": "#/definitions/scaledJob" },
-        "process-ingest-frames": { "$ref": "#/definitions/scaledJob" },
+        "process-extract": { "not": {}, "description": "Removed: nothing in the application enqueues to video_match_frames_extract_tasks any more. Delete this key; see UPGRADING.md." },
+        "process-video-fingerprint": { "not": {}, "description": "Removed: nothing in the application enqueues to video_match_frames_fingerprint_tasks any more. Delete this key; see UPGRADING.md." },
+        "process-frames": { "not": {}, "description": "Removed: nothing in the application enqueues to process_frames any more. Delete this key; see UPGRADING.md." },
+        "process-ingest-frames": { "not": {}, "description": "Removed: nothing in the application enqueues to ingest_frames any more. Delete this key; see UPGRADING.md." },
         "comparison-longform-data-generation": { "$ref": "#/definitions/scaledJob" }
       },
       "additionalProperties": { "$ref": "#/definitions/scaledJob" }
@@ -397,13 +392,34 @@
         "dashboards": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": { "type": ["boolean", "null"] }
           }
         },
         "matchDashboards": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" }
+            "enabled": { "type": ["boolean", "null"] }
+          }
+        },
+        "postgresDashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": ["boolean", "null"] },
+            "roleName": { "type": "string" },
+            "autoCreateRole": { "type": "boolean" }
+          }
+        },
+        "awsDashboards": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "cloudwatch": {
+              "type": "object",
+              "properties": {
+                "assumeRoleArn": { "type": "string" },
+                "defaultRegion": { "type": "string" }
+              }
+            }
           }
         },
         "alerts": {
@@ -462,6 +478,17 @@
         "limits": { "$ref": "#/definitions/resourceSpec" }
       }
     },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] },
+        "maxUnavailable": { "type": ["integer", "string"] }
+      },
+      "not": { "required": ["minAvailable", "maxUnavailable"] }
+    },
     "scaledObject": {
       "type": "object",
       "required": ["minReplicaCount", "maxReplicaCount", "concurrency", "shutdownTimeout", "resources", "queues"],
@@ -474,6 +501,7 @@
         "dbFollowerPoolSize": { "type": "integer" },
         "shutdownTimeout": { "type": "integer", "minimum": 1 },
         "resources": { "$ref": "#/definitions/resources" },
+        "pdb": { "$ref": "#/definitions/pdb" },
         "queues": {
           "type": "array",
           "items": {

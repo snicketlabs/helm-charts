@@ -70,6 +70,7 @@ spec:
            {{- include "platform.envVars" . | nindent 12 }}
            {{- include "platform.owningUserEnvVars" . | nindent 12 }}
            {{- include "platform.kedaPostgresRoleEnv" . | nindent 12 }}
+           {{- include "platform.grafanaPostgresRoleEnv" . | nindent 12 }}
           volumeMounts:
            {{- include "platform.volumeMounts" . | nindent 12 }}
       {{- with .Values.imagePullSecrets }}

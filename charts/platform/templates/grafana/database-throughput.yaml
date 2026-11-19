@@ -1,0 +1,321 @@
+{{- if and .Values.monitoring.awsDashboards (default false .Values.monitoring.awsDashboards.enabled) }}
+{{- /*
+Database load next to pipeline throughput, on one screen. AWS only: the
+database half is CloudWatch. See internal/MONITORING-COVERAGE.md.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-database-throughput
+  labels:
+    grafana_dashboard: "1"
+data:
+  platform-database-throughput.json: |
+    {
+     "id": null,
+     "uid": "platform-db-throughput",
+     "title": "Platform \u2014 database and throughput",
+     "tags": [
+      "platform",
+      "database"
+     ],
+     "timezone": "browser",
+     "schemaVersion": 42,
+     "version": 1,
+     "refresh": "1m",
+     "time": {
+      "from": "now-6h",
+      "to": "now"
+     },
+     "templating": {
+      "list": [
+       {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "cloudwatch",
+        "current": {},
+        "hide": 0,
+        "label": "CloudWatch"
+       },
+       {
+        "name": "region",
+        "type": "query",
+        "datasource": {
+         "type": "cloudwatch",
+         "uid": "$datasource"
+        },
+        "query": "regions()",
+        "refresh": 1,
+        "current": {},
+        "label": "Region"
+       },
+       {
+        "name": "dbinstanceidentifier",
+        "type": "query",
+        "datasource": {
+         "type": "cloudwatch",
+         "uid": "$datasource"
+        },
+        "query": "dimension_values($region, AWS/RDS, CPUUtilization, DBInstanceIdentifier)",
+        "refresh": 1,
+        "current": {},
+        "label": "DB instance"
+       }
+      ]
+     },
+     "panels": [
+      {
+       "type": "text",
+       "title": "How to read this",
+       "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+       },
+       "options": {
+        "mode": "markdown",
+        "content": "**The pairing is the point.** Either half alone is ambiguous; together they separate a busy database from one holding the pipeline up.\n\n| What you see | What it means |\n|---|---|\n| Queue depth up, worker CPU up, database calm | Working as intended. More work arrived and the workers are chewing through it. |\n| Queue depth up, worker CPU **low**, database CPU or latency up | The database is the constraint. Workers are waiting on it, not working. Step the instance up. |\n| Queue depth up, worker CPU low, database **also** calm | Not the database. Look at admission control (`materialProcessingCount`) and the scaledJob ceilings, or at whether pods can be scheduled at all. |\n| Connections flat at a ceiling | Raise `max_connections`, or admit less work. More CPU will not help this one. |\n\nA database that is too small *starves* the pipeline, and starvation reads as low CPU everywhere with long wall times \u2014 which looks like an idle system until you notice how little is finishing. That is why worker CPU sits next to database CPU here."
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "RDS CPU utilisation",
+       "description": "Sustained near the limit is the direct signal. Read it next to worker CPU below: high here and low there means the pipeline is waiting on the database.",
+       "datasource": {
+        "type": "cloudwatch",
+        "uid": "$datasource"
+       },
+       "targets": [
+        {
+         "datasource": {
+          "type": "cloudwatch",
+          "uid": "$datasource"
+         },
+         "namespace": "AWS/RDS",
+         "metricName": "CPUUtilization",
+         "statistic": "Average",
+         "dimensions": {
+          "DBInstanceIdentifier": "$dbinstanceidentifier"
+         },
+         "region": "$region",
+         "matchExact": true,
+         "id": "",
+         "refId": "A",
+         "label": "avg"
+        },
+        {
+         "datasource": {
+          "type": "cloudwatch",
+          "uid": "$datasource"
+         },
+         "namespace": "AWS/RDS",
+         "metricName": "CPUUtilization",
+         "statistic": "Maximum",
+         "dimensions": {
+          "DBInstanceIdentifier": "$dbinstanceidentifier"
+         },
+         "region": "$region",
+         "matchExact": true,
+         "id": "",
+         "refId": "B",
+         "label": "max"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 6
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "RDS connections",
+       "description": "Flat at a ceiling causes the same slowdown as a CPU limit, for a different reason \u2014 and more CPU will not fix it. Raise max_connections or admit less work.",
+       "datasource": {
+        "type": "cloudwatch",
+        "uid": "$datasource"
+       },
+       "targets": [
+        {
+         "datasource": {
+          "type": "cloudwatch",
+          "uid": "$datasource"
+         },
+         "namespace": "AWS/RDS",
+         "metricName": "DatabaseConnections",
+         "statistic": "Average",
+         "dimensions": {
+          "DBInstanceIdentifier": "$dbinstanceidentifier"
+         },
+         "region": "$region",
+         "matchExact": true,
+         "id": "",
+         "refId": "A",
+         "label": "connections"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 6
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "RDS read / write latency",
+       "description": "Rising latency against flat throughput is the clearest version of the symptom: the same work is taking the database longer.",
+       "datasource": {
+        "type": "cloudwatch",
+        "uid": "$datasource"
+       },
+       "targets": [
+        {
+         "datasource": {
+          "type": "cloudwatch",
+          "uid": "$datasource"
+         },
+         "namespace": "AWS/RDS",
+         "metricName": "ReadLatency",
+         "statistic": "Average",
+         "dimensions": {
+          "DBInstanceIdentifier": "$dbinstanceidentifier"
+         },
+         "region": "$region",
+         "matchExact": true,
+         "id": "",
+         "refId": "A",
+         "label": "read"
+        },
+        {
+         "datasource": {
+          "type": "cloudwatch",
+          "uid": "$datasource"
+         },
+         "namespace": "AWS/RDS",
+         "metricName": "WriteLatency",
+         "statistic": "Average",
+         "dimensions": {
+          "DBInstanceIdentifier": "$dbinstanceidentifier"
+         },
+         "region": "$region",
+         "matchExact": true,
+         "id": "",
+         "refId": "B",
+         "label": "write"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "s"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 6
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "Queue depth",
+       "description": "Unclaimed runnable jobs per queue, from KEDA's own scaler. Empty means Prometheus is not scraping keda-operator \u2014 see the chart docs \u2014 not that the queues are empty.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "max by (scaledObject) (keda_scaler_metrics_value{exported_namespace=\"{{ .Release.Namespace }}\", scaler=\"postgreSQLScaler\"})",
+         "legendFormat": "{{ `{{` }} scaledObject }}",
+         "range": true,
+         "refId": "A",
+         "editorMode": "code"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 12
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "Worker CPU",
+       "description": "Total CPU across this namespace's pods. The half of the pairing that tells you whether the workers are working. Low while queues grow is the database signal.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"{{ .Release.Namespace }}\", container!=\"\"}[5m]))",
+         "legendFormat": "cores",
+         "range": true,
+         "refId": "A",
+         "editorMode": "code"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 12
+       }
+      },
+      {
+       "type": "timeseries",
+       "title": "Scalers with work available",
+       "description": "How many KEDA scalers currently see work. Read with queue depth: scalers active while depth climbs means work is arriving faster than it drains.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum(keda_scaler_active{exported_namespace=\"{{ .Release.Namespace }}\"})",
+         "legendFormat": "active",
+         "range": true,
+         "refId": "A",
+         "editorMode": "code"
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short"
+        }
+       },
+       "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 12
+       }
+      }
+     ]
+    }
+{{- end }}

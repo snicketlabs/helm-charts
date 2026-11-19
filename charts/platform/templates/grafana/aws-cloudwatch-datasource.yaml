@@ -15,6 +15,6 @@ data:
         isDefault: false
         jsonData:
           authType: assume_role
-          defaultRegion: {{ .Values.monitoring.awsDashboards.cloudwatch.defaultRegion | quote }}
-          assumeRoleArn: {{ .Values.monitoring.awsDashboards.cloudwatch.assumeRoleArn | quote }}
+          defaultRegion: {{ required "monitoring.awsDashboards.cloudwatch.defaultRegion is required when monitoring.awsDashboards is enabled. Set it to the region your RDS instance is in, e.g. eu-west-2" .Values.monitoring.awsDashboards.cloudwatch.defaultRegion | quote }}
+          assumeRoleArn: {{ required "monitoring.awsDashboards.cloudwatch.assumeRoleArn is required when monitoring.awsDashboards is enabled. Set it to the IAM role Grafana should assume to read CloudWatch, e.g. arn:aws:iam::<account>:role/<cluster>-grafana-cloudwatch" .Values.monitoring.awsDashboards.cloudwatch.assumeRoleArn | quote }}
 {{- end }}

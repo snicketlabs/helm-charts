@@ -2,6 +2,190 @@
 
 `platform` 1.0.0 was the first public release.
 
+## 2.3.1 — Grafana generates its admin password
+
+The chart never set `kube-prometheus-stack.grafana.adminPassword`, so every
+install inherited kube-prometheus-stack's published default, `prom-operator`,
+and every upgrade wrote it back into the `<release>-grafana` Secret. The chart
+now sets it to `""`, so the grafana subchart generates a random password on
+first install and keeps it across upgrades.
+
+**New installs** need nothing.
+
+**Existing installs keep the password their Secret holds today**, usually
+`prom-operator`, because the chart reuses an existing Secret. Expect one Grafana
+restart on the upgrade. To replace `prom-operator`, delete the Secret, upgrade,
+then reset Grafana's database to the new value. The steps are under "A datasource
+change that does not take effect" in the chart README. Wait five minutes before
+logging in: the reset does not clear a login lockout that is already in place.
+
+If your values set `adminPassword` or `admin.existingSecret` yourself, nothing
+changes. If you render with `helm template` or deploy with Argo CD, set one of
+the two: those tools cannot read the existing Secret back, so a generated
+password would change on every render.
+
+## 2.3.0
+
+Two changes: web and the generic worker now run two pods behind a
+PodDisruptionBudget, and Grafana's RBAC is namespaced.
+
+### Web and the generic worker run two pods behind a PodDisruptionBudget
+
+Web and `scaledObjects.generic` used to run a single pod with no
+PodDisruptionBudget. A node drain or Karpenter consolidation evicted that pod,
+so web was unreachable, and generic jobs stopped being picked up, until the
+replacement pod was Ready.
+
+| Value | Was | Now |
+|---|---|---|
+| `webServers.replicas` | `1`, but the template ignored it, so web was always 1 pod | `2`, now honoured |
+| `scaledObjects.generic.minReplicaCount` | `1` | `2` |
+| `webServers.pdb` / `scaledObjects.generic.pdb` | none | `enabled: true` (renders `maxUnavailable: 1`) |
+
+Expect one more web pod (1 CPU / 1Gi requested) and one more generic worker
+(300m / 300Mi). Expect up to 15 more Postgres connections from the extra web
+pod (`railsMaxThreads`). Check that your database's `max_connections` has the
+headroom.
+
+To keep one pod, set `webServers.replicas: 1` and/or
+`scaledObjects.generic.minReplicaCount: 1`. With one pod, choose deliberately
+between `pdb.enabled: false` (evictions cause a short outage) and
+`pdb.minAvailable: 1` (no outage, but node drains wait for the node's
+termination grace period). Set at most one of `minAvailable` and
+`maxUnavailable`. Any other scaledObject can opt in with its own `pdb` block.
+
+### Grafana's RBAC is namespaced
+
+Grafana's sidecars read ConfigMaps and Secrets in Grafana's own namespace, via
+a Role. They previously did it via a ClusterRole granting `get/watch/list` on
+configmaps and secrets in **every** namespace.
+
+Nothing changes in what Grafana can do, because the sidecars only ever read
+their own namespace: `sidecar.*.searchNamespace` is unset and they default to
+it. The cluster-wide grant was never used.
+
+**If you set any `sidecar.*.searchNamespace` to another namespace**, set
+`kube-prometheus-stack.grafana.rbac.namespaced: false` or that sidecar stops
+finding what it reads. A namespaced Role cannot read another namespace.
+
+## 2.2.0 — Grafana runs under its own service account
+
+Grafana now gets a dedicated service account, `grafana`. This guide previously
+told you to point it at the application's, which gave Grafana the application's
+cloud identity; on EKS that identity denies `sts:AssumeRole` account-wide, so
+the CloudWatch datasource could never authenticate.
+
+If your values file sets `kube-prometheus-stack.grafana.serviceAccount`, drop
+it. Grafana restarts on upgrade.
+
+**On EKS, before upgrading**, if you use `monitoring.awsDashboards`: create an
+IAM role trusting `system:serviceaccount:<namespace>:grafana` that may assume
+the role in `monitoring.awsDashboards.cloudwatch.assumeRoleArn`, then annotate
+the service account with it.
+
+```yaml
+kube-prometheus-stack:
+  grafana:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<cluster>-grafana
+```
+
+Without the annotation the CloudWatch datasource fails to authenticate. Nothing
+else is affected; on-prem and GKE need no action.
+
+## 2.1.0 — six unused scaledJobs have been removed
+
+These scaledJobs consumed queues that the application no longer enqueues to, so
+their pods never ran:
+
+| scaledJob | queue |
+|---|---|
+| `ingest-attach-image` | `video_match_frames_attach_image_tasks` |
+| `process-compare-results` | `compare_materials_results` |
+| `process-extract` | `video_match_frames_extract_tasks` |
+| `process-video-fingerprint` | `video_match_frames_fingerprint_tasks` |
+| `process-frames` | `process_frames` |
+| `process-ingest-frames` | `ingest_frames` |
+
+Nothing changes at runtime. If your values file sets any of these keys, delete
+them; Helm now rejects them with `Must not validate the schema (not)` so a
+stale override fails loudly rather than being silently ignored.
+
+`process-extract-frames` is a different scaledJob and is unaffected.
+
+## 2.1.0 — dashboards now follow `monitoring.enabled`
+
+`monitoring.dashboards`, `monitoring.matchDashboards` and
+`monitoring.postgresDashboards` used to default to `false`. They now default to
+unset, and unset means "follow `monitoring.enabled`".
+
+**If you run the stack this chart installs** (`monitoring.enabled: true`), you
+will get dashboards you did not have before — the MatchCore tier view, the
+GoodJob tables, and a Postgres datasource to serve them. The chart mounts the
+datasource's password into Grafana for you, so there is nothing to wire.
+
+Nothing is removed, and the extra resources are a datasource Secret and two
+ConfigMaps. If you would rather not have them, name them:
+
+```yaml
+monitoring:
+  enabled: true
+  matchDashboards:
+    enabled: false
+  postgresDashboards:
+    enabled: false
+```
+
+**If you bring your own Prometheus and Grafana**, nothing changes. These flags
+only switch themselves on when this chart installs Grafana, because it cannot
+mount a password into a Grafana it does not own. Carry on setting them
+explicitly — see "Bringing your own Prometheus and Grafana" in the docs.
+
+**One behaviour worth knowing either way:** Grafana will not start with a
+datasource it cannot provision. Enabling `postgresDashboards` against your own
+Grafana without mounting the KEDA role's password takes Grafana down rather than
+leaving a dashboard blank.
+
+**If the datasource still shows the old user after upgrading**, the sidecar could
+not tell Grafana to reload it. Dashboards poll and refresh themselves;
+datasources only load at startup or via Grafana's admin API. A Grafana admin
+password that no longer matches its persisted database breaks that call, so the
+new dashboards appear against the old datasource. See "A datasource change that
+does not take effect" in the chart docs.
+
+**Upgrading through distr may need Force Conflicts.** Helm 4 applies with
+server-side apply and will not take fields another manager owns — here the
+ScaledJob `maxReplicaCount`s and the Grafana secret mount, both of which this
+release changes. Tick it on the deployment and re-run.
+
+### The Grafana Postgres datasource no longer uses your application credentials
+
+It previously read username, password, host, port and database from whatever you
+mounted at `/etc/secrets` — which the docs told you to point at the reference
+architecture's `*-rds-pg` Secret, the application's own database credentials.
+Grafana's Postgres datasource runs arbitrary SQL from Explore, so that made a
+dashboard a route to writing to your production database.
+
+It now uses `db_keda_ro`, which holds `SELECT` on `good_jobs` and
+`good_job_processes` and nothing else, and only the password is mounted.
+
+If you had `postgresDashboards` enabled with the old mount, replace it:
+
+```yaml
+extraSecretMounts:
+  - name: pg-secrets
+    secretName: platform-keda-postgres-ro
+    mountPath: /etc/secrets
+    readOnly: true
+    optional: true
+    items:
+      - key: password
+        path: password
+```
+
+Users of the bundled stack need not do anything — this is now the default.
+
 ## 2.0.0 — the `environment-sizes` presets have been removed
 
 `environment-sizes/small`, `/medium` and `/large` no longer ship with the chart.
