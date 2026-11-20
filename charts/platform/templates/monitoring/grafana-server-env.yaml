@@ -1,0 +1,10 @@
+{{- if include "platform.grafanaRoute" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-server
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+data:
+  GF_SERVER_ROOT_URL: {{ printf "https://%s/grafana/" (required "domain is required to serve Grafana at /grafana" .Values.domain) | quote }}
+{{- end }}

@@ -14,7 +14,7 @@ depend on it is how this went wrong the first time.
 Host, port, database and user render from values, so the only thing that has to
 reach Grafana as a file is the password -- mount the KEDA role Secret
 (platform.kedaPostgresRoleSecretName), which holds nothing else. See
-docs/README.md for the Grafana values.
+MONITORING.md for the Grafana values.
 
 With monitoring.postgresDashboards.autoCreateRole false the role is yours to
 create; grant it SELECT on those tables and mount its password the same way.

@@ -2,7 +2,7 @@ apiVersion: v2
 name: platform
 description: Snicket Labs Platform Self Hosted
 home: https://snicketlabs.io
-version: 2.3.1
+version: 3.0.0
 maintainers:
   - name: Snicket Labs Platform
     email: platform@snicketlabs.io
@@ -11,10 +11,17 @@ appVersion: "4.0.0"
 
 dependencies:
   - name: kube-prometheus-stack
-    version: 78.4.0
+    version: 93.4.1
     repository: https://prometheus-community.github.io/helm-charts
     condition: monitoring.enabled
-  - name: loki-stack
-    version: 2.10.2
+  # Loki 3, single binary. The OSS chart moved from grafana/helm-charts (now
+  # Enterprise-only) to grafana-community in March 2026.
+  - name: loki
+    version: 21.4.1
+    repository: https://grafana-community.github.io/helm-charts
+    condition: monitoring.logging.enabled
+  # Ships pod logs to Loki. Replaces promtail, which is end-of-life.
+  - name: alloy
+    version: 1.16.0
     repository: https://grafana.github.io/helm-charts
     condition: monitoring.logging.enabled

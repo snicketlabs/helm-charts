@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.awsDashboards (default false .Values.monitoring.awsDashboards.enabled) }}
+{{- if (.Values.monitoring.aws | default dict).enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,6 +15,6 @@ data:
         isDefault: false
         jsonData:
           authType: assume_role
-          defaultRegion: {{ required "monitoring.awsDashboards.cloudwatch.defaultRegion is required when monitoring.awsDashboards is enabled. Set it to the region your RDS instance is in, e.g. eu-west-2" .Values.monitoring.awsDashboards.cloudwatch.defaultRegion | quote }}
-          assumeRoleArn: {{ required "monitoring.awsDashboards.cloudwatch.assumeRoleArn is required when monitoring.awsDashboards is enabled. Set it to the IAM role Grafana should assume to read CloudWatch, e.g. arn:aws:iam::<account>:role/<cluster>-grafana-cloudwatch" .Values.monitoring.awsDashboards.cloudwatch.assumeRoleArn | quote }}
+          defaultRegion: {{ required "monitoring.aws.region is required when monitoring.aws is enabled. Set it to the region your RDS instance is in, e.g. eu-west-2" .Values.monitoring.aws.region | quote }}
+          assumeRoleArn: {{ required "monitoring.aws.cloudwatchRoleArn is required when monitoring.aws is enabled. Set it to the IAM role Grafana should assume to read CloudWatch, e.g. arn:aws:iam::<account>:role/<cluster>-grafana-cloudwatch" .Values.monitoring.aws.cloudwatchRoleArn | quote }}
 {{- end }}

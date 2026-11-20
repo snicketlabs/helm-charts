@@ -1,0 +1,30 @@
+{{- if and .Values.monitoring.logging.enabled (include "platform.bundledGrafana" .) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-loki-datasource
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |
+    apiVersion: 1
+    # Replaces loki-stack's "Loki", which has a random uid; Grafana will not
+    # start if it is updated in place.
+    deleteDatasources:
+      - name: Loki
+        orgId: 1
+    datasources:
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://{{ include "platform.lokiName" . }}:3100
+        isDefault: false
+        jsonData:
+          maxLines: 1000
+          # Loki's default tenant with auth off. drilldown-limits needs it sent.
+          httpHeaderName1: X-Scope-OrgID
+        secureJsonData:
+          httpHeaderValue1: fake
+{{- end }}

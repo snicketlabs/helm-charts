@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.awsDashboards (default false .Values.monitoring.awsDashboards.enabled) }}
+{{- if (.Values.monitoring.aws | default dict).enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

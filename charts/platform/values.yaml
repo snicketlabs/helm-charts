@@ -899,6 +899,11 @@ monitoring:
   # below follows it unless you say otherwise.
   enabled: false
 
+  # Loki 3 and Alloy, with a Grafana datasource. Pinned in the loki: and
+  # alloy: blocks below.
+  logging:
+    enabled: false
+
   # The three dashboard flags are unset rather than false on purpose: unset
   # means "follow monitoring.enabled", so turning monitoring on gets you
   # working dashboards without naming each one. Set true or false to override.
@@ -906,7 +911,7 @@ monitoring:
   # The datasource-backed ones do not switch themselves on for a Grafana we did
   # not install, because we cannot wire its password mount and Grafana will not
   # start with a datasource it cannot provision. Running your own Grafana? Set
-  # them true deliberately and mount the password yourself -- docs/README.md.
+  # them true deliberately and mount the password yourself -- MONITORING.md.
 
   # Pipeline overview: queues, pod CPU and memory, OOM kills, throttling.
   dashboards:
@@ -943,18 +948,15 @@ monitoring:
     # fails the install, it just leaves those panels with a permissions error.
     roleName: db_grafana_ro
     autoCreateRole: true
-  # AWS CloudWatch datasource and the RDS dashboard. The datasource assumes an
-  # IAM role, so both values below are required when this is enabled -- with
-  # them unset the datasource renders an empty role ARN and silently fails to
-  # connect.
-  awsDashboards:
+  # CloudWatch datasource, RDS dashboards and Grafana's IAM role.
+  aws:
     enabled: false
-    cloudwatch:
-      # IAM role for Grafana to assume, e.g.
-      # arn:aws:iam::<account>:role/<cluster>-grafana-cloudwatch
-      assumeRoleArn: ""
-      # Region your RDS instance is in, e.g. eu-west-2
-      defaultRegion: ""
+    # IRSA role annotated on Grafana's service account. Optional.
+    grafanaRoleArn: ""
+    # Required. Role the CloudWatch datasource assumes.
+    cloudwatchRoleArn: ""
+    # Required. Region of your RDS instance.
+    region: ""
   # Prometheus alert rules, rendered as a PrometheusRule (needs the Prometheus
   # Operator CRDs: installed by monitoring.enabled, or bring your own).
   # PlatformTaskPodOOMKilled fires when a scaledJobs (oneAndDone) pod is killed
@@ -976,32 +978,61 @@ monitoring:
 
 # Subchart values. These are ROOT keys named after the dependency, installed
 # when monitoring.enabled (kube-prometheus-stack) and monitoring.logging.enabled
-# (loki-stack) are set. Nesting them under monitoring: is silently ignored.
+# (loki, alloy) are set. Nesting them under monitoring: is silently ignored.
 kube-prometheus-stack:
+  # Upgrades the Prometheus Operator CRDs on every upgrade, which Helm alone
+  # does not.
+  crds:
+    upgradeJob:
+      enabled: true
+  # Not configured by this chart; route alerts with your own Alertmanager.
+  alertmanager:
+    enabled: false
   grafana:
+    persistence:
+      enabled: true
+      type: pvc
+      accessModes:
+        - ReadWriteOnce
+      size: 10Gi
+    # A ReadWriteOnce volume cannot attach to the new pod until the old one
+    # lets go.
+    deploymentStrategy:
+      type: Recreate
     # Empty, not omitted: omitting it inherits the published "prom-operator".
     # Empty makes Grafana generate a password on install and keep it on upgrade.
-    # See "Grafana admin password" in docs/README.md.
+    # See "Grafana admin password" in MONITORING.md.
     adminPassword: ""
 
-    # Grafana's own service account, optionally annotated with a cloud identity
-    # (an IRSA role ARN on EKS). The name is fixed: a trust policy has to name
-    # system:serviceaccount:<namespace>:grafana before the release exists.
+    # Rendered by this chart (create: false) so monitoring.aws.grafanaRoleArn
+    # can annotate it. The name is fixed for IRSA trust policies.
     serviceAccount:
-      create: true
+      create: false
       name: grafana
       annotations: {}
 
+    # Grafana is served at /grafana on the platform's host. root_url comes
+    # from the ConfigMap below, written when the route is on.
+    grafana.ini:
+      server:
+        serve_from_sub_path: true
+    envFromConfigMaps:
+      - name: '{{ .Release.Name }}-grafana-server'
+        optional: true
+
     # Namespaced RBAC: a Role in Grafana's namespace instead of a ClusterRole
     # granting get/watch/list on configmaps and secrets in EVERY namespace,
-    # which is the subchart default. The sidecars only ever read this one
-    # namespace -- sidecar.*.searchNamespace is unset, so they default to their
-    # own -- so the cluster-wide grant was never used.
+    # which is the subchart default.
     #
     # Set this back to false if you point any sidecar.*.searchNamespace at
     # another namespace; a namespaced Role cannot read it.
     rbac:
       namespaced: true
+    # Grafana's own namespace. kube-prometheus-stack's default, ALL, is
+    # forbidden under the namespaced Role, so no dashboards load.
+    sidecar:
+      dashboards:
+        searchNamespace: ""
 
     # Grafana's read-only role password, which the Postgres datasource reads
     # with $__file{/etc/secrets/password} when monitoring.postgresDashboards is
@@ -1017,7 +1048,7 @@ kube-prometheus-stack:
     # and Grafana will not start with postgresDashboards enabled.
     #
     # Bringing your own Grafana? This does nothing for you -- mount it there
-    # yourself. See docs/README.md.
+    # yourself. See MONITORING.md.
     extraSecretMounts:
       - name: pg-secrets
         secretName: platform-grafana-postgres-ro
@@ -1029,6 +1060,15 @@ kube-prometheus-stack:
             path: password
   prometheus:
     prometheusSpec:
+      # Without this Prometheus keeps its data on an emptyDir.
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 50Gi
       # Scrape the chart's PodMonitors. With the subchart's default an empty
       # selector means "only objects labelled release: <release>", which the
       # PodMonitors do not carry, so metrics.enabled rendered PodMonitors that
@@ -1041,6 +1081,172 @@ kube-prometheus-stack:
       # namespace and carries none of our release labels. Without this the
       # pipeline dashboards are empty and nothing says why.
       serviceMonitorSelectorNilUsesHelmValues: false
+
+# Loki 3, one pod on a PersistentVolume. Usual overrides:
+# singleBinary.persistence (size, storageClass) and
+# loki.limits_config.retention_period.
+loki:
+  # <release>-logs: loki-stack's StatefulSet was <release>-loki, and reusing
+  # the name fails the upgrade.
+  nameOverride: logs
+  deploymentMode: Monolithic
+  rbac:
+    namespaced: true
+  loki:
+    auth_enabled: false
+    configObjectName: '{{ include "loki.fullname" . }}'
+    generatedConfigObjectName: '{{ include "loki.fullname" . }}'
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2026-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+    # Needed by Logs Drilldown.
+    pattern_ingester:
+      enabled: true
+    limits_config:
+      volume_enabled: true
+      allow_structured_metadata: true
+      discover_log_levels: true
+      retention_period: 744h  # 31d
+    compactor:
+      retention_enabled: true
+      delete_request_store: filesystem
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: true
+      storageClass: ""  # cluster default
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  gateway:
+    enabled: false
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  memcached:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  test:
+    enabled: false
+  sidecar:
+    rules:
+      enabled: false
+
+# Alloy, a DaemonSet shipping every pod's logs to Loki.
+alloy:
+  crds:
+    create: false
+  controller:
+    type: daemonset
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+  alloy:
+    mounts:
+      varlog: true
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+    # Same labels as promtail set, so existing queries keep working.
+    configMap:
+      content: |-
+        discovery.kubernetes "pods" {
+          role = "pod"
+          selectors {
+            role  = "pod"
+            field = "spec.nodeName=" + sys.env("HOSTNAME")
+          }
+        }
+
+        discovery.relabel "pods" {
+          targets = discovery.kubernetes.pods.targets
+
+          rule {
+            source_labels = ["__meta_kubernetes_namespace"]
+            target_label  = "namespace"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_name"]
+            target_label  = "pod"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_container_name"]
+            target_label  = "container"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_node_name"]
+            target_label  = "node_name"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name", "__meta_kubernetes_pod_label_app"]
+            regex         = "^;*([^;]+)(;.*)?$"
+            target_label  = "app"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_component", "__meta_kubernetes_pod_label_component"]
+            regex         = "^;*([^;]+)(;.*)?$"
+            target_label  = "component"
+          }
+          rule {
+            source_labels = ["namespace", "app"]
+            separator     = "/"
+            target_label  = "job"
+          }
+          rule {
+            source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+            separator     = "/"
+            target_label  = "__path__"
+            replacement   = "/var/log/pods/*$1/*.log"
+          }
+        }
+
+        local.file_match "pods" {
+          path_targets = discovery.relabel.pods.output
+        }
+
+        loki.source.file "pods" {
+          targets    = local.file_match.pods.targets
+          forward_to = [loki.process.pods.receiver]
+        }
+
+        loki.process "pods" {
+          stage.cri {}
+          forward_to = [loki.write.default.receiver]
+        }
+
+        loki.write "default" {
+          endpoint {
+            url = "http://{{ include "platform.lokiName" . }}:3100/loki/api/v1/push"
+          }
+        }
 
 materialProcessingPipelines: "default|duration>=0"
 materialProcessingCount: "default=5"

@@ -409,17 +409,13 @@
             "autoCreateRole": { "type": "boolean" }
           }
         },
-        "awsDashboards": {
+        "aws": {
           "type": "object",
           "properties": {
             "enabled": { "type": "boolean" },
-            "cloudwatch": {
-              "type": "object",
-              "properties": {
-                "assumeRoleArn": { "type": "string" },
-                "defaultRegion": { "type": "string" }
-              }
-            }
+            "grafanaRoleArn": { "type": "string" },
+            "cloudwatchRoleArn": { "type": "string" },
+            "region": { "type": "string" }
           }
         },
         "alerts": {
@@ -436,8 +432,14 @@
     "materialProcessingPipelines": { "type": "string" },
     "materialProcessingCount": { "type": "string" },
     "workerDeploymentStrategy": { "type": "string" },
-    "loki-stack": { "type": "object", "additionalProperties": true },
-    "kube-prometheus-stack": { "type": "object", "additionalProperties": true }
+    "loki-stack": {
+      "description": "Removed: replaced by loki and alloy under monitoring.logging.enabled. Kept here so the chart can fail with that message rather than a schema error.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "kube-prometheus-stack": { "type": "object", "additionalProperties": true },
+    "loki": { "type": "object", "additionalProperties": true },
+    "alloy": { "type": "object", "additionalProperties": true }
   },
   "definitions": {
     "secretRef": {
