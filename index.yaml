@@ -3,6 +3,33 @@ entries:
   platform:
   - apiVersion: v2
     appVersion: 4.0.0
+    created: "2026-11-20T19:11:20.905513083Z"
+    dependencies:
+    - condition: monitoring.enabled
+      name: kube-prometheus-stack
+      repository: https://prometheus-community.github.io/helm-charts
+      version: 93.4.1
+    - condition: monitoring.logging.enabled
+      name: loki
+      repository: https://grafana-community.github.io/helm-charts
+      version: 21.4.1
+    - condition: monitoring.logging.enabled
+      name: alloy
+      repository: https://grafana.github.io/helm-charts
+      version: 1.16.0
+    description: Snicket Labs Platform Self Hosted
+    digest: 122e59743a37771388ad15298cc9fade37a24e89a31428357dd82413bb5723d6
+    home: https://snicketlabs.io
+    maintainers:
+    - email: platform@snicketlabs.io
+      name: Snicket Labs Platform
+    name: platform
+    type: application
+    urls:
+    - https://github.com/snicketlabs/helm-charts/releases/download/platform-3.0.0/platform-3.0.0.tgz
+    version: 3.0.0
+  - apiVersion: v2
+    appVersion: 4.0.0
     created: "2026-11-19T18:00:28.730777207Z"
     dependencies:
     - condition: monitoring.enabled
@@ -173,4 +200,4 @@ entries:
     urls:
     - https://github.com/snicketlabs/helm-charts/releases/download/secrets-configuration-gcp-0.2.0/secrets-configuration-gcp-0.2.0.tgz
     version: 0.2.0
-generated: "2026-11-19T18:00:28.730805948Z"
+generated: "2026-11-20T19:11:20.905544419Z"
