@@ -2,6 +2,44 @@
 
 `platform` 1.0.0 was the first public release.
 
+## 3.0.0 — Loki 3 replaces loki-stack
+
+`monitoring.logging.enabled` now installs Loki 3 and Alloy instead of
+loki-stack (Loki 2.6 and promtail). Logs Drilldown and the datasource health
+check work. kube-prometheus-stack goes from 78.4.0 to 93.4.1 (Grafana 13).
+
+Change your values before upgrading; the chart refuses to render otherwise:
+
+- Delete the `loki-stack:` block.
+- Replace `monitoring.awsDashboards` with `monitoring.aws`:
+
+  ```yaml
+  monitoring:
+    aws:
+      enabled: true
+      grafanaRoleArn: <was kube-prometheus-stack.grafana.serviceAccount.annotations>
+      cloudwatchRoleArn: <was awsDashboards.cloudwatch.assumeRoleArn>
+      region: <was awsDashboards.cloudwatch.defaultRegion>
+  ```
+
+- Optionally delete `kube-prometheus-stack.grafana.ingress` and its
+  `grafana.ini` `root_url`: Grafana is now served at `/grafana` on the
+  platform's own host.
+
+Now pinned by the chart, so they can come out of your values:
+`crds.upgradeJob`, `alertmanager.enabled: false`, Grafana persistence and
+`Recreate` strategy, and the Grafana service account.
+
+Alertmanager is now off. Set `kube-prometheus-stack.alertmanager.enabled: true`
+to keep it.
+
+Old logs are not migrated. Loki 2.6's volume (`storage-<loki name>-0`) is left
+in place and no longer read. Delete it once you no longer need those logs:
+
+```sh
+kubectl delete pvc -n <namespace> storage-<loki name>-0
+```
+
 ## 2.3.1 — Grafana generates its admin password
 
 The chart never set `kube-prometheus-stack.grafana.adminPassword`, so every

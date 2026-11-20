@@ -41,4 +41,7 @@
    kubectl get secret {{ .Release.Name }}-grafana -o jsonpath="{.data.admin-password}" -n {{ .Release.Name }} | base64 -d ; echo
 
    Username: admin
+{{- if include "platform.grafanaRoute" . }}
+   URL: https://{{ .Values.domain }}/grafana/
+{{- end }}
 {{- end }}

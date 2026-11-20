@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.awsDashboards (default false .Values.monitoring.awsDashboards.enabled) }}
+{{- if (.Values.monitoring.aws | default dict).enabled }}
 {{- /*
 Database load next to pipeline throughput, on one screen. AWS only: the
 database half is CloudWatch. See internal/MONITORING-COVERAGE.md.

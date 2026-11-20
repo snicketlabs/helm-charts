@@ -536,3 +536,33 @@ spec:
       app.kubernetes.io/component: {{ .component }}
 {{- end }}
 {{- end }}
+
+{{/* Loki's Service. Mirrors loki.fullname with nameOverride: logs. Uses only .Release.Name, as Alloy's config includes it too. */}}
+{{- define "platform.lokiName" -}}
+{{- if contains "logs" .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-logs" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end }}
+
+{{/* Grafana's Service. Mirrors grafana.fullname. */}}
+{{- define "platform.grafanaName" -}}
+{{- $grafana := (index .Values "kube-prometheus-stack" | default dict).grafana | default dict -}}
+{{- if $grafana.fullnameOverride -}}
+{{- $grafana.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "grafana" $grafana.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/* Route /grafana on the platform's host, unless Grafana has its own ingress. */}}
+{{- define "platform.grafanaRoute" -}}
+{{- $grafana := (index .Values "kube-prometheus-stack" | default dict).grafana | default dict -}}
+{{- if and (include "platform.bundledGrafana" .) (not ($grafana.ingress | default dict).enabled) (or .Values.ingress.enabled .Values.httpRoute.enabled) -}}true{{- end -}}
+{{- end }}

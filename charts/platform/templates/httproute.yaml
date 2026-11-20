@@ -33,6 +33,15 @@ spec:
     {{- end }}
   {{- end }}
   rules:
+    {{- if include "platform.grafanaRoute" . }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /grafana
+      backendRefs:
+        - name: {{ include "platform.grafanaName" . }}
+          port: {{ ((index .Values "kube-prometheus-stack").grafana.service | default dict).port | default 80 }}
+    {{- end }}
     {{- range .Values.httpRoute.rules }}
     - matches:
         {{- range .matches }}

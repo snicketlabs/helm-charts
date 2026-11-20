@@ -1,0 +1,7 @@
+{{- /* Values this chart no longer reads. Fail loudly rather than ignore them. */}}
+{{- if hasKey .Values.monitoring "awsDashboards" }}
+{{- fail "monitoring.awsDashboards was replaced by monitoring.aws (enabled, cloudwatchRoleArn, region, grafanaRoleArn). See UPGRADING.md." }}
+{{- end }}
+{{- if hasKey .Values "loki-stack" }}
+{{- fail "loki-stack was replaced by Loki 3 and Alloy under monitoring.logging.enabled. Remove the loki-stack: block. See UPGRADING.md." }}
+{{- end }}

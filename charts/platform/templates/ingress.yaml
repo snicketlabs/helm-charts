@@ -28,6 +28,16 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if include "platform.grafanaRoute" $ }}
+          # First: an ALB matches paths in order.
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "platform.grafanaName" $ }}
+                port:
+                  number: {{ ((index $.Values "kube-prometheus-stack").grafana.service | default dict).port | default 80 }}
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             {{- with .pathType }}
