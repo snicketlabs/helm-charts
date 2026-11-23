@@ -2,12 +2,12 @@ apiVersion: v2
 name: platform
 description: Snicket Labs Platform Self Hosted
 home: https://snicketlabs.io
-version: 3.0.0
+version: 3.0.1
 maintainers:
   - name: Snicket Labs Platform
     email: platform@snicketlabs.io
 type: application
-appVersion: "4.0.0"
+appVersion: "4.1.0"
 
 dependencies:
   - name: kube-prometheus-stack

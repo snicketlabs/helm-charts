@@ -5,7 +5,7 @@ status: 2
 -->
 <!-- AUTO-GENERATED — do not edit. Source: docs/README.md + README-generated.md.gotmpl. Regenerate with: make docs -->
 
-![Version: 3.0.0](https://img.shields.io/badge/Version-3.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.0.0](https://img.shields.io/badge/AppVersion-4.0.0-informational?style=flat-square)
+![Version: 3.0.1](https://img.shields.io/badge/Version-3.0.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.1.0](https://img.shields.io/badge/AppVersion-4.1.0-informational?style=flat-square)
 
 Snicket Labs Platform Self Hosted
 
@@ -1027,7 +1027,7 @@ The main `image.tag` defaults to the chart's `appVersion` if not set. Override i
 # image.tag is optional — omit to use the chart's appVersion
 image:
   repository: registry.snicketlabs.io/snicketlabs/platform
-  # tag: 4.0.0  # uncomment to override appVersion
+  # tag: 4.1.0  # uncomment to override appVersion
 ```
 
 > Don't forget to configure the initial user account. See the [Initial User Configuration](#initial-user-configuration) section above for details.
