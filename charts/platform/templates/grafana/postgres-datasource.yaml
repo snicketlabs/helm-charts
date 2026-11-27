@@ -12,8 +12,8 @@ one is named for its consumer, wants fewer tables, and having dashboards quietly
 depend on it is how this went wrong the first time.
 
 Host, port, database and user render from values, so the only thing that has to
-reach Grafana as a file is the password -- mount the KEDA role Secret
-(platform.kedaPostgresRoleSecretName), which holds nothing else. See
+reach Grafana is the password, as an env var from the Grafana role Secret
+(platform.grafanaPostgresRoleSecretName), which holds nothing else. See
 MONITORING.md for the Grafana values.
 
 With monitoring.postgresDashboards.autoCreateRole false the role is yours to
@@ -40,5 +40,5 @@ stringData:
           sslmode: {{ .Values.kedaAutoScaling.postgres.sslmode | default "require" }}
           database: {{ .Values.kedaAutoScaling.postgres.dbName | default .Values.postgres.auth.database }}
         secureJsonData:
-          password: $__file{/etc/secrets/password}
+          password: $__env{PLATFORM_GRAFANA_PG_PASSWORD}
 {{- end }}

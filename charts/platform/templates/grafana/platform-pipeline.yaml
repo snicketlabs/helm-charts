@@ -1,7 +1,25 @@
 {{- if include "platform.dashboardsEnabled" . }}
-{{- /* Long-lived worker container and the label shown for it. */ -}}
-{{- $workerContainer := "good-job" }}
-{{- $workerLabel := "GoodJob" }}
+{{- $fullname := include "platform.fullname" . }}
+{{- /* Workloads come from the chart's own values, so a job added or dropped
+       there needs no edit here. The hand-written list this replaces matched
+       none of the matchcore tiers (sc-25669). Pods are named
+       <workload>-<fullname>-<suffix>; the workload is the part before the
+       fullname. Sorted so the variable and its options never reorder. */ -}}
+{{- $workloads := list }}
+{{- range $name, $job := .Values.scaledJobs }}
+{{- if $job.enabled }}
+{{- $workloads = append $workloads $name }}
+{{- end }}
+{{- end }}
+{{- range $name, $worker := .Values.scaledObjects }}
+{{- $workloads = append $workloads (printf "%s-worker" $name) }}
+{{- end }}
+{{- $workloads = append $workloads "web" }}
+{{- if eq .Values.railsConsole.enabled true }}
+{{- $workloads = append $workloads "rails-console" }}
+{{- end }}
+{{- $workloads = sortAlpha $workloads }}
+{{- $workloadQuery := join "," $workloads }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -36,7 +54,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "fieldConfig": {
             "defaults": {
@@ -145,7 +163,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "fieldConfig": {
             "defaults": {
@@ -227,7 +245,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\", pod=~\"${pod_type}-.+\"}",
+              "expr": "max by (pod) (max_over_time(kube_pod_container_status_terminated_reason{namespace=\"{{ .Release.Namespace }}\", reason=\"OOMKilled\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\"}[$__rate_interval]))",
               "legendFormat": "{{ `{{` }} pod }} ",
               "range": true,
               "refId": "A"
@@ -239,7 +257,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "fieldConfig": {
             "defaults": {
@@ -322,10 +340,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
-              "expr": "increase(container_cpu_cfs_throttled_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type}.+|\"}[$__rate_interval])",
+              "expr": "increase(container_cpu_cfs_throttled_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\", container!~\"|POD\"}[$__rate_interval])",
               "instant": false,
               "legendFormat": "{{ `{{` }} pod }} ",
               "range": true,
@@ -338,7 +356,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "fieldConfig": {
             "defaults": {
@@ -452,21 +470,6 @@ data:
                     "value": 2
                   }
                 ]
-              },
-              {
-                "matcher": {
-                  "id": "byRegexp",
-                  "options": "/{{ $workerLabel }}:.*/"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "semi-dark-orange",
-                      "mode": "shades"
-                    }
-                  }
-                ]
               }
             ]
           },
@@ -495,23 +498,23 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "builder",
-              "expr": "node_namespace_pod_container:container_cpu_usage_seconds_total:sum_rate5m{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type}.+\", container=\"{{ $workerContainer }}\"}",
+              "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\", container!~\"|POD\"}[$__rate_interval]))",
               "hide": false,
               "instant": false,
-              "legendFormat": "{{ $workerLabel }}: {{ `{{` }} pod }}",
+              "legendFormat": "{{ `{{` }} pod }}",
               "range": true,
               "refId": "A"
             },
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
-              "expr": "max(\n    kube_pod_container_resource_requests{resource=\"cpu\", pod=~\"${pod_type}.+\"}\n)\n",
+              "expr": "max(kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", resource=\"cpu\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\"})",
               "hide": false,
               "instant": false,
               "legendFormat": "CPU Request",
@@ -521,10 +524,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
-              "expr": "max(kube_pod_container_resource_limits{resource=\"cpu\", pod=~\"${pod_type}.+\"})",
+              "expr": "max(kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", resource=\"cpu\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\"})",
               "hide": false,
               "instant": false,
               "legendFormat": "CPU Limit",
@@ -538,7 +541,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "fieldConfig": {
             "defaults": {
@@ -688,23 +691,23 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "builder",
-              "expr": "container_memory_rss{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type}.+\", container=\"{{ $workerContainer }}\"}",
+              "expr": "container_memory_working_set_bytes{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\", container!~\"|POD\"}",
               "hide": false,
               "instant": false,
-              "legendFormat": "{{ $workerLabel }}: {{ `{{` }} pod }}",
+              "legendFormat": "{{ `{{` }} pod }}",
               "range": true,
               "refId": "A"
             },
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "builder",
-              "expr": "max(kube_pod_container_resource_requests{pod=~\"${pod_type}.+\", resource=\"memory\"})",
+              "expr": "max(kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\", resource=\"memory\"})",
               "hide": false,
               "instant": false,
               "legendFormat": "Mem Request",
@@ -714,10 +717,10 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "builder",
-              "expr": "max(kube_pod_container_resource_limits{resource=\"memory\", pod=~\"${pod_type}.+\"})",
+              "expr": "max(kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", resource=\"memory\", pod=~\"${pod_type:regex}-{{ $fullname }}-.+\"})",
               "hide": false,
               "instant": false,
               "legendFormat": "Mem Limit",
@@ -736,57 +739,40 @@ data:
       "templating": {
         "list": [
           {
+            "current": {},
+            "includeAll": false,
+            "label": "Prometheus",
+            "name": "prometheus",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "regex": "",
+            "type": "datasource"
+          },
+          {
             "current": {
               "text": [
-                "generic",
-                "audiomatchfingerprint",
-                "ingest",
-                "process"
+                "All"
               ],
               "value": [
-                "generic",
-                "audiomatchfingerprint",
-                "ingest",
-                "process"
+                "$__all"
               ]
             },
-            "includeAll": false,
+            "includeAll": true,
             "label": "Workload Type",
             "multi": true,
             "name": "pod_type",
             "options": [
-              {
-                "selected": true,
-                "text": "process",
-                "value": "process"
-              },
-              {
-                "selected": true,
-                "text": "audiomatchfingerprint",
-                "value": "audiomatchfingerprint"
-              },
-              {
-                "selected": true,
-                "text": "generic",
-                "value": "generic"
-              },
+              {{- range $i, $w := $workloads }}
+              {{- if $i }},{{ end }}
               {
                 "selected": false,
-                "text": "web",
-                "value": "web"
-              },
-              {
-                "selected": true,
-                "text": "ingest",
-                "value": "ingest"
-              },
-              {
-                "selected": false,
-                "text": "rails-console",
-                "value": "rails-console"
+                "text": "{{ $w }}",
+                "value": "{{ $w }}"
               }
+              {{- end }}
             ],
-            "query": "process, audiomatchfingerprint, generic, web, ingest, rails-console",
+            "query": "{{ $workloadQuery }}",
             "type": "custom"
           }
         ]

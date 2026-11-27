@@ -70,7 +70,8 @@ goodJob:
   shutdownTimeout: 600 # seconds a scaledJob task pod lets its job finish after SIGTERM (GOOD_JOB_SHUTDOWN_TIMEOUT). A task still running after this is interrupted and retried, and counts towards its retry limit, so cover your longest tasks
   shutdownGraceSeconds: 60 # headroom added to the drain time to get terminationGracePeriodSeconds (workers and scaledJobs)
 
-# KEDA is a hard prerequisite of this chart — see docs/README.md. There is no
+# KEDA is a hard prerequisite of this chart — install it as shown in the README
+# prerequisites (docs/README.md); SCALING.md explains the options. There is no
 # static-worker fallback; every worker is a ScaledObject or ScaledJob.
 kedaAutoScaling:
   # KEDA scales on the good_jobs table directly, mirroring the pattern proven in
@@ -85,10 +86,10 @@ kedaAutoScaling:
     host: ""
     port: 5432
     # When true (default), a Job creates/converges a dedicated read-only Postgres
-    # role (roleName) with SELECT on good_jobs only — not pg_read_all_data — and
-    # never fails the install/upgrade if the DB user lacks CREATEROLE (common for
-    # BYOP/onprem). See docs/README.md "Manual KEDA role setup" for the fallback
-    # if your Postgres can't grant that automatically.
+    # role (roleName) with SELECT on good_jobs and good_job_processes only — not
+    # pg_read_all_data — and never fails the install/upgrade if the DB user lacks
+    # CREATEROLE (common for BYOP/onprem). See SCALING.md "Manual setup" for the
+    # fallback if your Postgres can't grant that automatically.
     autoCreateRole: true
     roleName: db_keda_ro
     dbUser: "" # defaults to roleName if unset — leave unset unless you're using autoCreateRole: false with your own pre-existing role under a different name
@@ -151,18 +152,32 @@ secretKeys:
     name: api-secrets
 
 storage:
-  # Scratch space for ingest and processing. matchcore streams its source from a
-  # presigned URL and writes here, per pod.
+  # Both locations below live on the same writable volume, an emptyDir mounted
+  # at /tmp on each pod. Pods run with a read-only root filesystem, so every
+  # path the application writes to must sit under /tmp.
   #
-  # This is an emptyDir volume mounted at /tmp.
-  # Container entrypoint script creates a directory at `tmpStorage.path` with required permissions
+  # Temporary files written while a single step runs: decoding video, encoding
+  # the browse proxy. Removed as soon as that step finishes.
   tmpStorage:
     enabled: true
-    path: /tmp/app_tmp # Must exist in /tmp.  Created by the entrypoint with the AP_SIGNAL_TMPDIR variable
-    # Optional limit on the whole emptyDir. Sources are streamed, not staged here, so this does not
-    # need to scale with content size; per-job ephemeral-storage on the matchcore tiers is the
-    # better control. Do not disable tmpStorage: the root filesystem is read-only.
+    path: /tmp/app_tmp # Must be under /tmp. Created on container start.
+    # Optional limit on the whole /tmp volume, covering appStorage.location
+    # too. Per-job ephemeral-storage limits are the better control - see the
+    # Scratch Storage section of the documentation for sizing.
+    #
+    # Do not disable tmpStorage: with a read-only root filesystem, the
+    # application would have nowhere to write.
     #sizeLimit: 20Gi
+
+  # Files the application keeps for the length of an ingest, rather than for a
+  # single step: extracted audio, generated proxies, extracted frames, and the
+  # source itself when it cannot be read directly from object storage.
+  # Removed when the ingest finishes.
+  #
+  # Each pod keeps its own copy. Nothing is shared between pods, and the
+  # application is told so.
+  appStorage:
+    location: /tmp/app_storage # Must be under /tmp, and separate from tmpStorage.path
 
 # Any additional file systems that contain content, or secrets required by the application may be mounted here
 # These are mounted on all pods, so PVCs must be ReadOnlyMany
@@ -296,6 +311,23 @@ scaledObjects:
         priority: 4
       - name: refresh_ingest_source_reports
         priority: 5
+  compare-pairs:
+    minReplicaCount: 0
+    maxReplicaCount: 10 # up to 20 pairs at once (2 per pod): 80 CPU and 20Gi at peak
+    concurrency: 2
+    shutdownTimeout: 180
+    matchcoreThreads: 4
+    targetQueryValue: 2
+    resources:
+      limits:
+        cpu: "8"
+        memory: 2Gi
+      requests:
+        cpu: "8"
+        memory: 2Gi
+    queues:
+      - name: compare_pairs
+        priority: 1
 
 # ScaledJobs: KEDA-managed ephemeral job pods with "one and done" pattern
 # Use for CPU-intensive or long-running tasks that benefit from dedicated pod-per-job scaling
@@ -316,7 +348,7 @@ scaledObjects:
 # ("2000m" -> "2", "0.75" -> "750m", "2048Mi" -> "2Gi", "1.5Gi" -> "1536Mi").
 # That rewrite hands server-side-apply ownership of the field to KEDA, and every
 # later Helm upgrade then fails with "conflict with manager keda". See the
-# "Upgrades and field conflicts" section of the chart documentation.
+# "Upgrades and field conflicts" section of SCALING.md.
 #
 # Rules: no trailing "000" on cpu millis, no decimal points, and use the largest
 # binary suffix that divides exactly. Quote bare integers so they stay strings.
@@ -326,7 +358,7 @@ scaledObjects:
 # values.schema.json enforces what a pattern can express: decimals, bare YAML
 # numbers and whole-core millicores. It cannot express divisibility, so 4096Mi
 # passes validation and is still rewritten to 4Gi. If an upgrade fails with
-# "conflict with manager keda", that is the cause — see docs/README.md
+# "conflict with manager keda", that is the cause — see SCALING.md
 # "Upgrades and field conflicts" for the --force-conflicts remedy.
 scaledJobs:
   # --- matchcore fingerprinting -------------------------------------------------
@@ -988,6 +1020,29 @@ kube-prometheus-stack:
   # Not configured by this chart; route alerts with your own Alertmanager.
   alertmanager:
     enabled: false
+  # Bundled dashboards and scrapes this chart does not use. Each switch is the
+  # subchart's own, so the dashboard and its ServiceMonitor go together.
+  #
+  # EKS Auto Mode runs CoreDNS, kube-proxy and the control plane outside the
+  # cluster, so these targets never resolve and their dashboards stay empty.
+  # Off here for every install, since this chart does not run those components.
+  coreDns:
+    enabled: false
+  kubeProxy:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  # Node-exporter dashboards for macOS and AIX. Linux stays on.
+  nodeExporter:
+    operatingSystems:
+      darwin:
+        enabled: false
+      aix:
+        enabled: false
   grafana:
     persistence:
       enabled: true
@@ -1034,30 +1089,27 @@ kube-prometheus-stack:
       dashboards:
         searchNamespace: ""
 
-    # Grafana's read-only role password, which the Postgres datasource reads
-    # with $__file{/etc/secrets/password} when monitoring.postgresDashboards is
-    # enabled. Defaulted so the bundled stack needs no manual wiring: the chart
-    # creates this Secret itself (monitoring.postgresDashboards.autoCreateRole).
+    # Grafana's read-only role password, which the Postgres datasource reads as
+    # $__env{PLATFORM_GRAFANA_PG_PASSWORD} when monitoring.postgresDashboards is
+    # enabled. An environment variable rather than a file: every upgrade recreates
+    # the Secret, and a file that briefly disappears made Grafana re-provision its
+    # datasource with no password. An env var is read at pod start, so the Secret
+    # being recreated cannot reach Grafana.
     #
-    # optional: true so the mount is harmless when the Secret is absent --
-    # autoCreateRole: false, where the role and its Secret are yours to make.
-    # Without it Grafana would sit in CreateContainerConfigError.
+    # optional: true so the variable is simply unset when the Secret is absent
+    # (autoCreateRole: false), rather than Grafana sitting in CreateContainerConfigError.
     #
-    # Helm replaces lists rather than merging them: if you set extraSecretMounts
-    # yourself, restate this entry or the Postgres datasource loses its password
-    # and Grafana will not start with postgresDashboards enabled.
+    # Helm replaces maps wholesale here too: if you set envValueFrom yourself,
+    # restate this entry.
     #
-    # Bringing your own Grafana? This does nothing for you -- mount it there
-    # yourself. See MONITORING.md.
-    extraSecretMounts:
-      - name: pg-secrets
-        secretName: platform-grafana-postgres-ro
-        mountPath: /etc/secrets
-        readOnly: true
-        optional: true
-        items:
-          - key: password
-            path: password
+    # Bringing your own Grafana? This does nothing for you -- set the variable
+    # there yourself. See MONITORING.md.
+    envValueFrom:
+      PLATFORM_GRAFANA_PG_PASSWORD:
+        secretKeyRef:
+          name: platform-grafana-postgres-ro
+          key: password
+          optional: true
   prometheus:
     prometheusSpec:
       # Without this Prometheus keeps its data on an emptyDir.

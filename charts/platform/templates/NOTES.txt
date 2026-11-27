@@ -29,10 +29,10 @@
 {{- end }}
 
 2. Admin User Credentials:
-   The initial admin credentials are stored in:
+   Email: {{ .Values.owningUser.email }}
+   Password, from the {{ .Values.owningUser.secret.name }} Secret:
 
-   kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.fullname" . }}-owning-user-credentials -o jsonpath="{.data.email}" | base64 -d
-   kubectl -n {{ .Release.Namespace }} get secret {{ include "platform.fullname" . }}-owning-user-credentials -o jsonpath="{.data.password}" | base64 -d
+   kubectl -n {{ .Release.Namespace }} get secret {{ .Values.owningUser.secret.name }} -o jsonpath="{.data.password}" | base64 -d
 
 {{ if .Values.monitoring.enabled }}
 3. Grafana Admin Password:

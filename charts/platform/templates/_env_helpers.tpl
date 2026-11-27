@@ -224,6 +224,17 @@
 - name: AD_SIGNAL_TMPDIR
   value: {{ .Values.storage.tmpStorage.path }}
 {{- end }}
+{{- if not (hasPrefix "/tmp" .Values.storage.appStorage.location) }}
+{{- fail "storage.appStorage.location must be located in /tmp directory: the root filesystem is read-only, so anything else fails at runtime rather than here" }}
+{{- end }}
+- name: APP_STORAGE_LOCATION
+  value: {{ .Values.storage.appStorage.location | quote }}
+{{- /* Nothing here is mounted across pods, and a shared filesystem is not
+       supported on a client-hosted install - so this is fixed rather than
+       configurable. The application reads it to decide whether another pod
+       can see what this one writes. */}}
+- name: APP_STORAGE_IS_SHARED
+  value: "false"
 {{- if .Values.snicketProtocol }}
 - name: SNICKET_PROTOCOL
   value: {{ .Values.snicketProtocol | quote }}

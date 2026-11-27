@@ -1,4 +1,4 @@
-# Upgrade Notes
+# Upgrade notes
 
 `platform` 1.0.0 was the first public release.
 
@@ -189,10 +189,10 @@ leaving a dashboard blank.
 not tell Grafana to reload it. Dashboards poll and refresh themselves;
 datasources only load at startup or via Grafana's admin API. A Grafana admin
 password that no longer matches its persisted database breaks that call, so the
-new dashboards appear against the old datasource. See "A datasource change that
-does not take effect" in the chart docs.
+new dashboards appear against the old datasource. See [A datasource change that
+does not take effect](MONITORING.md#a-datasource-change-that-does-not-take-effect).
 
-**Upgrading through distr may need Force Conflicts.** Helm 4 applies with
+**Upgrading through Distr may need Force Conflicts.** Helm 4 applies with
 server-side apply and will not take fields another manager owns — here the
 ScaledJob `maxReplicaCount`s and the Grafana secret mount, both of which this
 release changes. Tick it on the deployment and re-run.
@@ -223,6 +223,18 @@ extraSecretMounts:
 ```
 
 Users of the bundled stack need not do anything — this is now the default.
+
+### The Grafana role password is an environment variable, not a file
+
+The Postgres datasource used to read the Grafana role's password with
+`$__file{/etc/secrets/password}`, from a file mounted through `extraSecretMounts`.
+It now reads `$__env{PLATFORM_GRAFANA_PG_PASSWORD}`, set through `envValueFrom`.
+Every upgrade recreates the Secret, and the file briefly disappearing made Grafana
+re-provision its datasource with no password.
+
+If you mounted the file yourself, delete that `extraSecretMounts` entry and set
+`envValueFrom` as shown in [MONITORING.md](MONITORING.md). The bundled stack needs
+no change.
 
 ## 2.0.0 — the `environment-sizes` presets have been removed
 

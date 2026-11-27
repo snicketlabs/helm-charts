@@ -5,13 +5,13 @@ status: 2
 -->
 <!-- AUTO-GENERATED — do not edit. Source: docs/README.md + README-generated.md.gotmpl. Regenerate with: make docs -->
 
-![Version: 3.0.1](https://img.shields.io/badge/Version-3.0.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.1.0](https://img.shields.io/badge/AppVersion-4.1.0-informational?style=flat-square)
+![Version: 3.1.0](https://img.shields.io/badge/Version-3.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 4.1.0](https://img.shields.io/badge/AppVersion-4.1.0-informational?style=flat-square)
 
 Snicket Labs Platform Self Hosted
 
 **Homepage:** <https://snicketlabs.io>
 
-# Platform Self Hosted Helm Chart
+# Platform self-hosted Helm chart
 
 ## Upgrading
 
@@ -19,10 +19,15 @@ See [UPGRADING.md](UPGRADING.md) for version-specific upgrade instructions.
 
 ## Overview
 
-This chart will install a self hosted Platform service.
+This chart installs a self-hosted Platform service.
 
-It is strongly suggested that you run this chart on a Kubernetes cluster dedicated to the platform. We provide a reference implementation suitable
-for AWS [here](https://github.com/snicketlabs/reference-architecture)
+Installing the chart directly on your cluster is a **fully self-managed**
+installation: you are responsible for keeping the system up to date. We
+recommend an [Assisted self-managed deployment](https://portal.snicketlabs.io/docs/platform/distr)
+instead.
+
+We strongly recommend running this chart on a Kubernetes cluster dedicated to the platform. For AWS, use our
+[reference architecture](https://github.com/snicketlabs/reference-architecture).
 
 ## Prerequisites
 
@@ -30,33 +35,74 @@ A Kubernetes cluster (1.32+) with [KEDA](https://keda.sh/) installed, Helm 3.16+
 
 KEDA is a hard requirement, not an option. Every worker in this chart is a KEDA
 ScaledObject or ScaledJob; there is no static Deployment fallback. Install it
-before the first deploy — see [KEDA Autoscaling](#keda-autoscaling) below, which
-also covers scraping KEDA's metrics, the chart's only source of queue depth.
+before the first deploy:
+
+```bash
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo update
+helm install keda kedacore/keda --namespace keda --create-namespace \
+  --set prometheus.operator.enabled=true \
+  --set prometheus.operator.serviceMonitor.enabled=true
+```
+
+Already running KEDA? Add the same two values with an upgrade:
+
+```bash
+helm upgrade keda kedacore/keda -n keda --reuse-values \
+  --set prometheus.operator.enabled=true \
+  --set prometheus.operator.serviceMonitor.enabled=true
+```
+
+The two `prometheus.operator` values expose KEDA's metrics, the chart's only
+source of queue depth. For why both are needed, see
+[Installing KEDA](SCALING.md#installing-keda).
 
 ### Scratch Storage (/tmp)
 
-Source media is not copied to local disk, so scratch space does **not** need to
-scale with the size of your content. MatchCore fingerprinting reads video files
+Source media is normally not copied to local disk, so scratch space does **not**
+need to scale with the size of your content. Fingerprinting reads video files
 in place from a presigned URL. Image sequences (TIFF) are the one source the
-application downloads itself, and it streams the frames into MatchCore through a
-pipe rather than staging the sequence on disk.
+application downloads itself, and it streams the frames through a pipe rather
+than staging the sequence on disk.
+
+Reading in place needs a presigned **HTTPS** URL. Where your object store
+cannot issue one, the application downloads the source instead and works from
+that copy, which does scale with content size. AWS S3 always issues them; an
+S3-compatible store may not, or may be configured on plain HTTP. If you are
+using one, see
+[S3-Compatible Primary Storage](#s3-compatible-primary-storage-non-aws) and size
+scratch accordingly.
 
 Pods run with a read-only root filesystem, and the only writable path is `/tmp`,
-a disk-backed `emptyDir` on the node. The application works in a directory under
-it, `storage.tmpStorage.path` (default `/tmp/app_tmp`), which must stay inside
-`/tmp`. MatchCore jobs use it to encode the browse proxy, which at the default
-settings (640x360, 20 fps) takes up to about 1GB per 2.5 hours of content. Each
-MatchCore scaledJob requests `ephemeral-storage: 1Gi`, so the scheduler reserves
-node disk for it, and is capped at `4Gi`, so a job that overruns is evicted
-rather than filling the node.
+a disk-backed `emptyDir` on the node. The application works in two directories
+under it, both of which must stay inside `/tmp`:
+
+| Value | Default | Holds |
+|---|---|---|
+| `storage.tmpStorage.path` | `/tmp/app_tmp` | Temporary files for a single step — decoding video, encoding the proxy. Removed when that step finishes. |
+| `storage.appStorage.location` | `/tmp/app_storage` | Files kept for the length of an ingest — extracted audio, generated proxies, extracted frames, and a downloaded source where one is needed. Removed when the ingest finishes. |
+
+They are separate so that disk use can be attributed to one or the other, but
+they share the same `/tmp` volume, so a `sizeLimit` set there covers both.
+
+Each pod keeps its own copy of these files and cleans them up when the ingest
+ends. Nothing is shared between pods, and the application is told so — a shared
+filesystem is not supported here, so there is no value to set.
+
+Proxy encoding uses this space, and at the default settings (640x360, 20 fps)
+takes up to about 1GB per 2.5 hours of content. Each fingerprinting scaledJob
+(the `*-matchcore` tiers) requests `ephemeral-storage: 1Gi`, so the scheduler
+reserves node disk for it, and is capped at `4Gi`, so a job that overruns is
+evicted rather than filling the node.
 
 The 4Gi cap is enough for sources up to about 10 hours long. If you ingest longer
 content, raise the tier's `ephemeral-storage` limit, or long ingests will be
 evicted part-way through.
 
-When sizing node root volumes, allow up to 4Gi for each MatchCore job that can run
-on the node at once, plus images and logs. Other workers also use `/tmp`, but
-they carry no `ephemeral-storage` request, so leave headroom above that figure.
+When sizing node root volumes, allow up to 4Gi for each fingerprinting job that
+can run on the node at once, plus images and logs. Other workers also use
+`/tmp`, but they carry no `ephemeral-storage` request, so leave headroom above
+that figure.
 You do not need hundreds of gigabytes of scratch.
 
 The `/tmp` volume has no size limit by default. You can set one, but the per-job
@@ -67,7 +113,9 @@ storage:
   tmpStorage:
     enabled: true
     path: /tmp/app_tmp   # must be under /tmp
-    # sizeLimit: 20Gi
+    # sizeLimit: 20Gi    # covers appStorage.location as well
+  appStorage:
+    location: /tmp/app_storage   # must be under /tmp
 ```
 
 Do not set `tmpStorage.enabled: false` or mount your own volume over `/tmp`. The
@@ -80,7 +128,7 @@ application has nowhere to write.
 
 Note: The platform image includes an entrypoint script that handles the setting of permissions for the emptyDir volumes.
 
-### S3 Buckets
+### S3 buckets
 
 The application makes use of two types of S3 buckets:
 
@@ -98,7 +146,7 @@ s3:
 
 Set `s3.region` to the region your primary bucket is actually in. It also selects the regional STS endpoint used for IRSA credentials, so a value that does not match the bucket is not limited to S3: requests pay an extra redirect and credentials are vended from the wrong region.
 
-### S3-Compatible Primary Storage (Non-AWS)
+### S3-compatible primary storage (non-AWS)
 
 By default Platform uses AWS S3 for its primary storage (thumbnails, proxy videos, and other artifacts), authenticated via IRSA. If you are running on-premises or on a cloud that provides an S3-compatible object store (e.g. Ceph RGW, MinIO, GCS S3-interop), you can point Platform at that instead.
 
@@ -233,23 +281,23 @@ This only needs to be run once per bucket. It persists in the object store indep
 
 > AWS S3 users should configure CORS via the bucket policy in the reference architecture Terraform rather than the CLI.
 
-### Optional Content via S3 Compatible API
+### Optional content via S3-compatible API
 
 Content to ingest may be provided to the application via an S3 compatible endpoint.
 Static Access Keys and Secret credentials to access an S3 compatible endpoint may be provided in Platform's web interface.
 
-#### Credentials via AWS IAM with Kubernetes Service Account (IRSA)
+#### Credentials via AWS IAM with Kubernetes service account (IRSA)
 
 For content in an AWS S3 bucket an IAM Role assumable by a Kubernetes service account (IRSA) in an EKS pod may also be used by providing a IAM role ARN to annotate
 the Service Account with.  See the AWS IAM Roles for service accounts [documentation](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) for further information on how to configure the IAM role and EKS cluster.
 
-```
+```yaml
 serviceAccount:
   annotations:
    eks.amazonaws.com/role-arn: "arn:aws:iam::111122223333:role/my-role"
 ```
 
-## Postgres Database
+## Postgres database
 
 **The chart does not provision a database.** Supply your own — a managed service
 such as AWS RDS, an in-cluster operator such as CloudNativePG, or any Postgres
@@ -331,333 +379,16 @@ exception, because without `good_jobs` it cannot scale at all and silently not
 scaling is worse than failing.
 
 Setting either to `false` leaves that role to you; the `GRANT` statements are in
-[Manual setup](#keda-autoscaling) below and alongside the Grafana datasource.
+[Scaling](SCALING.md#postgres-connection-configuration) for KEDA's role and
+[Monitoring](MONITORING.md#the-grafana-database-role) for Grafana's.
 Nothing else in the chart touches database permissions.
 
-## KEDA Autoscaling
+## Scaling
 
-Platform uses [KEDA (Kubernetes Event Driven Autoscaling)](https://keda.sh/) to scale GoodJob workers on queue depth in Postgres, creating pods on demand when work is available and scaling to zero when queues are empty. All job processing runs this way. Without KEDA installed the install fails: the chart creates ScaledObject and ScaledJob resources, and the API server rejects them when the CRDs are absent.
+For KEDA autoscaling, worker types, fingerprinting tier resources and sizing the
+workloads, see [Scaling](SCALING.md).
 
-### Prerequisites
-
-**KEDA Installation Required**
-
-KEDA must be installed on your Kubernetes cluster before you deploy Platform. Platform supports KEDA v2.x.
-
-Install KEDA using Helm:
-
-```bash
-helm repo add kedacore https://kedacore.github.io/charts
-helm repo update
-helm install keda kedacore/keda --namespace keda --create-namespace
-```
-
-Or follow the [KEDA installation documentation](https://keda.sh/docs/latest/deploy/).
-
-**Scrape KEDA's metrics if you want the dashboards**
-
-KEDA's operator exposes `keda_scaler_metrics_value` on port 8080, one series per
-trigger. Because every worker here scales on a Postgres query counting rows in
-`good_jobs`, that value *is* the queue depth for each queue — for ScaledJobs and
-ScaledObjects alike.
-
-This is the only queue-depth source the chart has, so if it is not scraped the
-pipeline dashboards have nothing to draw.
-
-KEDA's own chart can create the ServiceMonitor for you:
-
-```bash
-helm install keda kedacore/keda --namespace keda --create-namespace \
-  --set prometheus.operator.enabled=true \
-  --set prometheus.operator.serviceMonitor.enabled=true
-```
-
-**Both flags are needed.** `prometheus.operator.enabled` is what exposes the
-metrics; `serviceMonitor.enabled` only creates the object that scrapes them.
-Setting the second alone renders no ServiceMonitor at all, silently.
-
-Already running KEDA? Same two values on an upgrade:
-
-```bash
-helm upgrade keda kedacore/keda -n keda --reuse-values \
-  --set prometheus.operator.enabled=true \
-  --set prometheus.operator.serviceMonitor.enabled=true
-```
-
-With `monitoring.enabled`, the bundled Prometheus picks that up: this chart sets
-`serviceMonitorSelectorNilUsesHelmValues: false`, so Prometheus selects
-ServiceMonitors in any namespace rather than only ones carrying its own release
-label — which KEDA's, created by a different chart, does not.
-
-Running your own Prometheus instead? Make sure its ServiceMonitor selector
-reaches KEDA's namespace, or scrape the `keda-operator` Deployment directly on
-port 8080.
-
-One thing to know when writing your own queries against these series: KEDA's own
-namespace lands on the `namespace` label. The application's namespace arrives as
-`exported_namespace`.
-
-**Kubernetes Version**
-
-- Kubernetes 1.32+ is required (the minimum version the chart is tested against).
-
-### Configuring KEDA
-
-There is nothing to switch on. Two values blocks describe every worker the
-chart runs:
-
-- **`scaledObjects`** — long-running multi-queue workers, scaled like an HPA.
-- **`scaledJobs`** — one pod per task, for CPU-heavy or long-running work.
-
-Tune polling under `kedaAutoScaling`:
-
-```yaml
-kedaAutoScaling:
-  postgres:
-    pollingInterval: 30  # Check queue depth every 30 seconds
-```
-
-### Postgres Connection Configuration
-
-> Workers run `good_job start` and scaledJobs run `good_job:perform_inline_task[<queue>]`. GoodJob has no queue weights: when a worker's queues have different `priority` values they are claimed in strict order, highest first, and when they are all equal GoodJob takes jobs from any of them by priority and creation time. Each worker's `concurrency` and `shutdownTimeout` set its GoodJob thread count and shutdown timeout. `kedaAutoScaling.postgres.host` must be set whenever the chart can't work out the database host itself (for example `postgres.dbPrimaryHostSecret`), and rendering fails with a message if it isn't. See the `goodJob` values for polling, probe and grace-period settings. scaledJob task pods drain for `goodJob.shutdownTimeout` seconds (600 by default) after a termination signal and get `terminationGracePeriodSeconds` of that plus `goodJob.shutdownGraceSeconds` (60). A task still running after the drain is interrupted and retried, and counts towards its retry limit, so set `goodJob.shutdownTimeout` to cover your longest tasks.
-
-KEDA polls the `good_jobs` table directly (via a `postgresql`-type trigger). This needs a dedicated, read-only Postgres role — not your application's own DB user — so KEDA's blast radius is limited to counting rows in `good_jobs` and `good_job_processes`.
-
-**Automatic setup (default: `kedaAutoScaling.postgres.autoCreateRole: true`)**
-
-The database preparation Job, on install and on every upgrade, also creates (or converges) a `db_keda_ro` role and grants it `SELECT` on `good_jobs` and `good_job_processes` only — never broader access like `pg_read_all_data`. The role's password is generated once and stored in a Secret that's stable across upgrades.
-
-Grafana's Postgres datasource gets its **own** role, `db_grafana_ro`, created by the same Job and in the same way. It holds `SELECT` on `good_jobs`, `good_job_processes`, `jobs`, `ingest_masters` and `materials` — the five tables the dashboards read — and nothing else.
-
-It is deliberately not KEDA's role. The two want different tables, and a role named for one consumer being quietly relied on by another is how dashboards ended up depending on KEDA's grants. Configure it under `monitoring.postgresDashboards.roleName` and `.autoCreateRole`.
-
-Either way the datasource never runs as the application's database user. It executes whatever SQL someone types into Explore, so it gets read-only access to the tables the dashboards need and no more.
-
-With `autoCreateRole: false` the role is yours to create:
-
-```sql
-CREATE ROLE db_grafana_ro LOGIN PASSWORD 'choose-a-strong-password';
-GRANT CONNECT ON DATABASE your_database_name TO db_grafana_ro;
-GRANT USAGE ON SCHEMA public TO db_grafana_ro;
-GRANT SELECT ON good_jobs, good_job_processes, jobs, ingest_masters, materials TO db_grafana_ro;
-```
-
-A table the chart cannot grant on never fails your install — it logs a warning and the panels reading that table show a permissions error.
-
-Permission problems never fail your install or upgrade: if your Postgres user doesn't have `CREATEROLE` (common if you supply your own Postgres — see below), the Job logs a warning and exits successfully. It does fail if `good_jobs` or `good_job_processes` doesn't exist after the schema is loaded, which usually means the application image doesn't include GoodJob. Check the database preparation Job's logs (`app.kubernetes.io/component: db-prepare-initial` on install, `db-prepare` on upgrades) if KEDA scaling doesn't come up — if it couldn't create the role automatically, use the manual setup below.
-
-**Manual setup**
-
-If you're supplying your own Postgres (BYOP) and prefer to manage this yourself, set `autoCreateRole: false` and run:
-
-```sql
-CREATE ROLE db_keda_ro LOGIN PASSWORD 'choose-a-strong-password';
-GRANT CONNECT ON DATABASE your_database_name TO db_keda_ro;
-GRANT USAGE ON SCHEMA public TO db_keda_ro;
-GRANT SELECT ON good_jobs TO db_keda_ro;
-GRANT SELECT ON good_job_processes TO db_keda_ro;
-```
-
-Then create the Secret and point the chart at it:
-
-```bash
-kubectl create secret generic my-keda-postgres-secret \
-  --namespace snicketlabs \
-  --from-literal=password=choose-a-strong-password
-```
-
-```yaml
-kedaAutoScaling:
-  enabled: true
-  postgres:
-    autoCreateRole: false
-    dbUser: db_keda_ro    # or your own role name
-    authenticationRef:
-      secretName: my-keda-postgres-secret
-```
-
-If your Postgres host isn't resolvable from `postgres.primaryHost` (for example, you use `postgres.dbPrimaryHostSecret`), also set `kedaAutoScaling.postgres.host` explicitly — KEDA needs a literal host string at render time and can't read one from a Secret the way application env vars can.
-
-### Worker Types
-
-Platform provides two types of autoscaled workers:
-
-**ScaledJobs (One-and-Done Pattern)**
-- Best for CPU-intensive, long-running, or variable-duration tasks (e.g., video fingerprinting, transcoding)
-- Creates ephemeral pods that process exactly one job then terminate
-- Processes ONE queue per scaledJob
-- Scales from 0 to maxReplicaCount based on queue depth
-
-**ScaledObjects (HPA-like Pattern)**
-- Best for lightweight, fast-processing tasks with multiple related queues
-- Long-running worker deployments that scale similar to HorizontalPodAutoscaler
-- Can process MULTIPLE queues per worker with configurable concurrency
-- Scales between minReplicaCount and maxReplicaCount based on aggregate queue depth
-
-The chart ships a single set of autoscaling defaults in `values.yaml`. Pods scale to demand, bounded by each worker's `maxReplicaCount`, by `materialProcessingCount`, and by what your cluster can schedule. Raise a ceiling in `your-custom-values.yaml` if a workload needs it — see [Sizing the Workloads](#sizing-the-workloads).
-
-### Postgres panels fail behind a WAF
-
-If the Postgres panels error while everything else on the same dashboard loads,
-and the error text is an HTML block page rather than a database message, a web
-application firewall is eating the request.
-
-Grafana's Postgres datasource posts the literal SQL in the body of a request to
-`/api/ds/query`:
-
-```
-SELECT queue_name, ... FROM good_jobs WHERE finished_at IS NULL ...
-```
-
-Managed WAF rulesets match that as an SQL injection attempt and block it.
-Cloudflare returns its "Attention Required" page, with wording about *"submitting
-a certain word or phrase, a SQL command or malformed data"*. Grafana shows the
-whole page as the query error.
-
-Prometheus and CloudWatch panels are unaffected — their request bodies do not
-look like SQL — so the failure is selective in a way that points at the
-dashboards rather than at the proxy.
-
-**There is nothing to change in this chart.** Posting SQL is how the datasource
-works. Your options are:
-
-- Add a WAF bypass or exception for Grafana's `/api/ds/query` path.
-- Do not front Grafana with the WAF.
-- Reach Grafana without going through it, which is enough for a quick check:
-
-```bash
-kubectl port-forward -n <ns> svc/<release>-grafana 3000:80
-```
-
-Then browse `http://localhost:3000`. If you set `grafana.ini` `serve_from_sub_path`
-with a `root_url` ending in a path, append that path too.
-
-Checking from inside the cluster hides this entirely — a `kubectl exec ... curl
-localhost:3000` test passes while the browser fails, because only the browser
-goes through the proxy.
-
-### A datasource change that does not take effect
-
-Dashboards and datasources reload differently, and the difference is invisible
-until it bites:
-
-- **Dashboards poll.** The sidecar writes the file, Grafana's dashboard
-  provisioner rescans the directory on a timer and picks it up.
-- **Datasources do not.** Grafana reads them at startup, or when something calls
-  its admin provisioning API. The sidecar makes that call.
-
-So if the sidecar cannot authenticate to Grafana, dashboards keep updating while
-datasources silently stay as they were. New panels appear, pointed at an old
-datasource — which looks exactly like a chart that shipped a broken dashboard.
-
-The tell is in the Grafana pod logs:
-
-```
-POST /api/admin/provisioning/datasources/reload → 401
-error="[password-auth.failed] too many consecutive incorrect login attempts"
-```
-
-The usual cause is a Grafana admin password that no longer matches its database:
-Grafana applies the Secret's password only when it first creates its database.
-Reset it and restart:
-
-```bash
-PW=$(kubectl get secret <release>-grafana -n <ns> -o jsonpath='{.data.admin-password}' | base64 -d)
-kubectl exec -n <ns> deploy/<release>-grafana -c grafana -- grafana cli admin reset-admin-password "$PW"
-kubectl rollout restart -n <ns> deploy/<release>-grafana
-```
-
-### Upgrades and field conflicts
-
-If an upgrade fails with an error like this, the cause is KEDA, not your values:
-
-```
-Upgrade "platform" failed: conflict occurred while applying object
-<name> keda.sh/v1alpha1, Kind=ScaledJob: Apply failed with 4 conflicts:
-conflict with "keda" using keda.sh/v1alpha1:
-  .spec.jobTargetRef.template.spec.containers[name="good-job"].resources.limits.cpu
-```
-
-Helm 4 applies releases with server-side apply, which tracks which component
-owns each field. KEDA's operator writes ScaledJobs back with a full-object
-update, and where its serialisation of a field differs from what Helm sent, it
-takes ownership of that field. Helm's next upgrade then finds it no longer owns
-what it is trying to set, and stops.
-
-A first install is never affected, because KEDA has not yet reconciled the
-object. The failure appears on the second and later upgrades, which makes it
-look intermittent.
-
-**To recover, re-run the upgrade with `--force-conflicts`:**
-
-```bash
-helm upgrade platform ... --force-conflicts
-```
-
-This returns ownership of the contested fields to Helm and the upgrade
-proceeds. It is safe here: it asserts the values from your chart and values
-files, which is what you intended to deploy.
-
-Deploying through distr, there is no flag to pass: tick **Force Conflicts** on
-the deployment before hitting update.
-
-The owner named in the error is not always `keda`. Deploying through distr it is
-usually `controller`, the agent's own field manager, and the fields are whichever
-ones your values change — a `maxReplicaCount` you raised, a secret mount you
-repointed. The cause and the fix are the same either way.
-
-The most common trigger is a resource quantity written in a form the Kubernetes
-API server rewrites when it stores the object, such as `4096Mi` (stored as
-`4Gi`). The chart's own values avoid these forms, and `values.schema.json`
-rejects the ones it can detect, but `4096Mi` is indistinguishable from a valid
-`4095Mi` by pattern alone. If you set your own `resources` values, prefer the
-largest binary suffix that divides exactly — `4Gi` rather than `4096Mi`, `750m`
-rather than `0.75`.
-
-This is a known upstream issue in KEDA
-([kedacore/keda#7306](https://github.com/kedacore/keda/issues/7306)) and is not
-specific to this chart.
-
-## Fingerprinting Resource Tuning
-
-Video fingerprinting runs in the `*-matchcore` scaledJobs. Each one is a tier
-for a kind of content: the application routes every ingest to the tier that
-matches its source, and each tier has its own CPU and memory envelope.
-
-| Tier | Content | CPU request / limit | Memory | Threads |
-|---|---|---|---|---|
-| `dv-matchcore` | DV | 2 / 4 | 2Gi | 4 |
-| `interlaced-matchcore` | Interlaced VC-3 and DVCPRO HD 1080i | 6 / 8 | 2Gi | 4 |
-| `hd-matchcore` | HD | 5 / 8 | 3Gi | 8 |
-| `uhd-matchcore` | UHD / 4K | 6 / 8 | 4Gi | 8 |
-| `tiff-sequence-matchcore` | TIFF image sequences | 4 / 8 | 4Gi | 8 |
-| `j2k-hd-matchcore` | JPEG 2000, HD | 8 / 8 | 2Gi | 8 |
-| `j2k-uhd-matchcore` | JPEG 2000, UHD / 4K | 12 / 12 | 6Gi | 12 |
-
-**Node sizing.** The scheduler places a pod by its *request*, so each tier needs
-a node with that much allocatable CPU free. The largest request,
-`j2k-uhd-matchcore` at 12 CPU and 6Gi, never fits an 8 vCPU node and fits a
-16 vCPU node only when little else is running on it. If you will ingest 4K JPEG
-2000, provide nodes that can hold it. Raising a tier's CPU limit above the
-cores its node has does nothing.
-
-**Tuning a tier.** When you override a tier's resources:
-
-- Keep `matchcoreThreads` no higher than the CPU limit, and leave the limit
-  above it where the tier already does. The same thread count goes to both the
-  fingerprinter and the proxy encoder, so a pod can use more cores than it has
-  threads. Cutting the limit to equal the thread count throttles the job:
-  interlaced VC-3 at threads 4 and limit 4 took 50% longer than at limit 8.
-- Keep the memory request equal to the limit. An eviction mid-decode loses the
-  work.
-- Write quantities in canonical form; see
-  [Upgrades and field conflicts](#upgrades-and-field-conflicts).
-
-Tier figures come from benchmark measurements, not production workloads. Use the
-MatchCore tiers dashboard (see [Getting the most out of your metrics](MONITORING.md#getting-the-most-out-of-your-metrics))
-to compare what each tier actually uses against its envelope.
-
-## Image Pull Secrets
+## Image pull secrets
 
 Platform images and the Helm chart are hosted on the Snicketlabs registry at `registry.snicketlabs.io`. Access is controlled by a personal access token generated at **https://deploy.snicketlabs.io/settings/access-tokens**.
 
@@ -686,13 +417,13 @@ imagePullSecrets:
 
 > We recommend using a secret management solution such as AWS Secrets Manager CSI Driver, External Secrets Operator, or Vault to manage this credential in production.
 
-## Ingress and Domain
+## Ingress and domain
 
 To allow access to Platform's user interface and API an Ingress must be configured, the ingress should provide TLS termination with certificates trusted by any clients you wish to connect to the interface.
 
 This is an example ingress configuration using the AWS Load Balancer Controller.
 
-```
+```yaml
 ingress:
   enabled: true
   className: "alb"
@@ -718,7 +449,7 @@ ingress:
 
 The application domain must be configured the same as the Ingress.
 
-```
+```yaml
 domain: snicketlabs.company.example.com
 ```
 
@@ -765,13 +496,13 @@ A DNS entry must be configured to match the `domain` value pointing to the Ingre
 
 Prometheus, Grafana, Loki, dashboards and alerts: see [Monitoring](MONITORING.md).
 
-## Application Errors
+## Application errors
 
 The application can send error traces to honeybadger.io. This is **optional** and off by default.
 
 > Please consult with Snicket Labs technical services for your unique API key.
 
-### Honeybadger Configuration
+### Honeybadger configuration
 
 Honeybadger is off while `honeybadger.environment` is empty, which is the default. In that state the chart sets no Honeybadger API key or environment on the pods, tells the application not to report (`HONEYBADGER_REPORT_DATA=false`), and the platform pods do not need a `honeybadger-api-key` secret.
 
@@ -811,9 +542,11 @@ honeybadger:
 
 > We recommend using a secret management solution such as AWS Secrets Manager CSI Driver, External Secrets Operator, Vault, or another secret management solution of your choice.
 
-## SMTP Email Configuration
+## SMTP email configuration
 
-Platform can be configured to send email notifications via SMTP. To enable SMTP, we recommend creating a Kubernetes secret containing your SMTP credentials:
+SMTP is optional, and off by default (`smtp.enabled: false`).
+
+To have Platform send email notifications via SMTP, we recommend creating a Kubernetes secret containing your SMTP credentials:
 
 ```bash
   kubectl create secret generic smtp-secrets \
@@ -842,7 +575,7 @@ smtp:
     name: smtp-secrets
 ```
 
-## Initial User Configuration
+## Initial user configuration
 
 When Platform is first deployed, an initial user account is created to allow you to access the system. This user is configured via the `owningUser` section in your values file.
 
@@ -864,82 +597,24 @@ owningUser:
 
 > The initial password for this user will be randomly generated during deployment. You can reset it through the Platform web interface or using the Rails console. It is also possible to set a password in the values file.
 
-## Sizing the Workloads
+To sign in for the first time, read the password from the Secret named by
+`owningUser.secret.name` (default `owning-user-credentials`):
 
-Node pools autoscale and the application scales its workers to demand. The two values
-that bound throughput are:
-
-- **`materialProcessingCount`** (default `"default=5"`) — how many materials the application
-  admits for processing at once.
-- **`maxReplicaCount`** on each scaledJob and scaledObject — how far that worker may scale.
-
-They ship aligned, at five materials in and five slots at each stage, so no single stage is
-the bottleneck by default. Raise both together in `your-custom-values.yaml` if you want more
-throughput and have the cluster capacity for it; raising one alone will not help.
-
-How much either costs you depends on your content, library size, comparison types and which
-features you use, which is why the chart does not guess on your behalf.
-
-> Please consult with Snicket Labs technical services for sizing recommendations.
-
-### Recognising a database that cannot keep up
-
-The database is usually what runs out first, and it rarely announces itself. The
-symptom is **material processing getting slower while the workers themselves are
-not busy**: jobs wait on the database, so wall times stretch while worker CPU
-stays low. Processing that has gradually slowed without the workers working
-harder is the signal to give the database more room.
-
-Judge it on throughput, not CPU alone. A database that is too small for the work
-*starves* the pipeline, and starvation reads as low CPU everywhere with long wall
-times — which looks much like an idle system until you notice how little is
-finishing.
-
-Two things that are **not** saturation on their own:
-
-- **A deep queue that is draining.** Depth tells you work arrived, not that
-  anything is stuck. Watch whether it clears.
-- **Brief CPU spikes.** Sustained pressure matters; momentary peaks do not.
-
-**If you have provider metrics** (CloudWatch for RDS, Cloud Monitoring for Cloud
-SQL), the things worth watching are sustained CPU, connection count against your
-connection limit, and read and write latency. Rising latency alongside flat
-throughput is the clearest version of the symptom above.
-
-**If you run your own Postgres**, you do not need provider metrics to see this.
-Postgres will tell you itself:
-
-```sql
--- Sessions waiting rather than working. Growing and staying grown is the signal.
-SELECT wait_event_type, wait_event, count(*)
-FROM pg_stat_activity
-WHERE state = 'active'
-GROUP BY 1, 2 ORDER BY 3 DESC;
-
--- Headroom on connections.
-SELECT count(*) AS in_use,
-       current_setting('max_connections')::int AS connection_limit
-FROM pg_stat_activity;
+```bash
+kubectl get secret owning-user-credentials -n <namespace> -o jsonpath='{.data.password}' | base64 -d
 ```
-
-Climbing `wait_event_type = 'IO'` or `'LWLock'` under steady load points at the
-database rather than the application. Connections sitting near the limit cause
-the same slowdown for a different reason, and more CPU will not fix that one —
-raise `max_connections`, or reduce `materialProcessingCount` so less work is
-admitted at once.
-
-**If you are not running the monitoring in this chart at all**, the two values at
-the top of this section are still what bound throughput, and the symptom above is
-still what to look for. How you observe it is your choice: the dashboards here
-need Grafana and Prometheus, and nothing about the symptom requires either.
 
 ---
 
-# AWS EKS QuickStart Deployment Guide
+## AWS EKS quickstart deployment guide
+
+This guide is for a **fully self-managed** install on AWS EKS. For the
+recommended route, see
+[Assisted self-managed deployment](https://portal.snicketlabs.io/docs/platform/distr).
 
 Deploying the chart with the default values will install Platform to the `snicketlabs` namespace, however, you will need to modify your own values.yml file to achieve a fully functional EKS deployment.
 
-## Prerequisites (Reference Architecture users)
+### Prerequisites (reference architecture users)
 
 Complete these steps before installing this chart.
 
@@ -1019,7 +694,7 @@ See [Image Pull Secrets](#image-pull-secrets) below.
 
 Use the steps below as a checklist when creating your own `your-custom-values.yaml` file.
 
-## 1. Image Tags
+### 1. Image tags
 
 The main `image.tag` defaults to the chart's `appVersion` if not set. Override it only when you need to pin the platform app to a specific release independently of the chart.
 
@@ -1032,7 +707,7 @@ image:
 
 > Don't forget to configure the initial user account. See the [Initial User Configuration](#initial-user-configuration) section above for details.
 
-## 2. Initial User Configuration
+### 2. Initial user configuration
 
 ```yaml
 owningUser:
@@ -1044,7 +719,7 @@ owningUser:
 
 ---
 
-## 3. AWS IAM Service Account (IRSA)
+### 3. AWS IAM service account (IRSA)
 
 See reference architecture or configure IRSA for service account to access AWS resources such as S3.
 
@@ -1058,9 +733,9 @@ serviceAccount:
 
 ---
 
-## 4. Domain and Ingress Configuration
+### 4. Domain and ingress configuration
 
-### Domain Name
+#### Domain name
 
 Set your application domain.
 
@@ -1068,7 +743,7 @@ Set your application domain.
 domain: your-domain-name.example.com # Your domain name
 ```
 
-### Ingress Configuration
+#### Ingress configuration
 
 Platform is intended to run on a dedicated cluster. Configure ingress for EKS Auto Mode — the built-in ALB controller does not honour `alb.ingress.kubernetes.io/load-balancer-attributes`, so the idle timeout is set via `ingressClassParams` instead.
 
@@ -1103,9 +778,9 @@ ingress:
           pathType: Prefix
 ```
 
-## 5. Database Configuration
+### 5. Database configuration
 
-### PostgreSQL (RDS)
+#### PostgreSQL (RDS)
 
 > See the reference architecture for AWS RDS configuration.
 
@@ -1150,7 +825,7 @@ postgres:
     key: password
 ```
 
-### 6. S3 Storage Configuration
+### 6. S3 storage configuration
 
 #### AWS S3 (IRSA)
 
@@ -1168,19 +843,19 @@ s3:
 
 > Ensure your IAM role (IRSA) has appropriate S3 permissions for the bucket.
 
-#### S3-Compatible Storage (Non-AWS)
+#### S3-compatible storage (non-AWS)
 
 For Ceph, MinIO, GCS S3-interop, or any other S3-compatible store, see [S3-Compatible Primary Storage (Non-AWS)](#s3-compatible-primary-storage-non-aws) in the requirements section above.
 
-## 7. Image Pull Secrets
+### 7. Image pull secrets
 
 For configuring image pull secrets to authenticate with the Snicket Labs (formerly Ad Signal) container registry, see [Image Pull Secrets](#image-pull-secrets) above.
 
-## 8. Add HoneyBadger Credentials (optional)
+### 8. Add Honeybadger credentials (optional)
 
 Only needed if you enable Honeybadger error tracking. See the [Honeybadger Configuration](#honeybadger-configuration) section.
 
-## 9. Network Access Requirements
+### 9. Network access requirements
 
 | Direction | Service | Address(s) | Port | Description |
 |-----------|---------|------------|------|-------------|
@@ -1191,9 +866,9 @@ Only needed if you enable Honeybadger error tracking. See the [Honeybadger Confi
 
 ---
 
-## Quick Start Checklist
+### Quick start checklist
 
-### Pre-install (Reference Architecture users)
+#### Pre-install (reference architecture users)
 
 - [ ] Terraform reference architecture deployed (two-stage apply complete)
 - [ ] kubeconfig updated (`aws eks update-kubeconfig`)
@@ -1202,7 +877,7 @@ Only needed if you enable Honeybadger error tracking. See the [Honeybadger Confi
 - [ ] Kubernetes secrets synced from AWS Secrets Manager — automatic with the reference architecture, otherwise install `secrets-configuration-aws` yourself
 - [ ] `dockercredentials` image pull secret created in the `snicketlabs` namespace
 
-### Values configuration
+#### Values configuration
 
 - [ ] Initial user configured (`owningUser.email`, `owningUser.organisationName`)
 - [ ] IRSA service account annotation set
@@ -1214,11 +889,10 @@ Only needed if you enable Honeybadger error tracking. See the [Honeybadger Confi
 
 ---
 
-## Deployment Command
+### Deployment command
 
-Once you've customized your `values.yaml` file, install the chart with the relevant size file:
-
-> Please consult with Snicketlabs technical services for sizing recommendations.
+Once you've customized your `values.yaml` file, install the chart. For sizing,
+see [Sizing the workloads](SCALING.md#sizing-the-workloads).
 
 Charts are served directly from the Snicketlabs OCI registry. Ensure you are logged in first (see [Image Pull Secrets](#image-pull-secrets)), then install:
 
@@ -1234,7 +908,7 @@ helm install oci://registry.snicketlabs.io/snicketlabs/platform-chart/platform \
 
 `--wait --wait-for-jobs` makes `helm install` report a failure if the database preparation Job (schema, seeds, KEDA role) or the application doesn't come up, instead of returning as soon as the resources are created. Allow enough `--timeout` for Postgres to start and the schema to load; on a failure Helm reports when the timeout runs out, while the Job itself (`app.kubernetes.io/component: db-prepare-initial`) shows as failed after a few attempts.
 
-### Retrieving the Initial Password
+#### Retrieving the initial password
 
 The helm command above will output the kubectl command to retrieve the initial user password, if you are unable to use this you can use the kubectl command below:
 
@@ -1242,7 +916,7 @@ The helm command above will output the kubectl command to retrieve the initial u
 kubectl get secret owning-user-credentials -n snicketlabs -o jsonpath='{.data.password}' | base64 -d
 ```
 
-### Resetting the Initial Password
+#### Resetting the initial password
 
 The initial user's email is set via `owningUser.email` in your helm values. To reset the password from the command line, use the Rails runner on the web pod:
 
@@ -1266,7 +940,7 @@ kubectl exec -n snicketlabs deployment/web-platform -- bin/rails runner \
 
 ----
 
-## Getting Help
+### Getting help
 
 > For sizing recommendations, production configuration guidance, or deployment assistance, please consult with Snicket Labs technical services.
 
@@ -1276,7 +950,7 @@ kubectl exec -n snicketlabs deployment/web-platform -- bin/rails runner \
 - **Storage issues**: Scratch is an emptyDir on the node; check node disk pressure, and for evicted MatchCore jobs the tier's `ephemeral-storage` limit. See [Scratch Storage (/tmp)](#scratch-storage-tmp)
 - **Ingress issues**: Verify ALB controller is installed and certificate ARN is correct
 
-## Long Term Checklist
+### Long-term checklist
 
 Use this checklist to ensure you've replaced more temporary measures with production-ready solutions.
 
@@ -1382,19 +1056,16 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | kedaAutoScaling.postgres.roleName | string | `"db_keda_ro"` |  |
 | kedaAutoScaling.postgres.sslmode | string | `"require"` |  |
 | kube-prometheus-stack.alertmanager.enabled | bool | `false` |  |
+| kube-prometheus-stack.coreDns.enabled | bool | `false` |  |
 | kube-prometheus-stack.crds.upgradeJob.enabled | bool | `true` |  |
 | kube-prometheus-stack.grafana."grafana.ini".server.serve_from_sub_path | bool | `true` |  |
 | kube-prometheus-stack.grafana.adminPassword | string | `""` |  |
 | kube-prometheus-stack.grafana.deploymentStrategy.type | string | `"Recreate"` |  |
 | kube-prometheus-stack.grafana.envFromConfigMaps[0].name | string | `"{{ .Release.Name }}-grafana-server"` |  |
 | kube-prometheus-stack.grafana.envFromConfigMaps[0].optional | bool | `true` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].items[0].key | string | `"password"` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].items[0].path | string | `"password"` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].mountPath | string | `"/etc/secrets"` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].name | string | `"pg-secrets"` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].optional | bool | `true` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].readOnly | bool | `true` |  |
-| kube-prometheus-stack.grafana.extraSecretMounts[0].secretName | string | `"platform-grafana-postgres-ro"` |  |
+| kube-prometheus-stack.grafana.envValueFrom.PLATFORM_GRAFANA_PG_PASSWORD.secretKeyRef.key | string | `"password"` |  |
+| kube-prometheus-stack.grafana.envValueFrom.PLATFORM_GRAFANA_PG_PASSWORD.secretKeyRef.name | string | `"platform-grafana-postgres-ro"` |  |
+| kube-prometheus-stack.grafana.envValueFrom.PLATFORM_GRAFANA_PG_PASSWORD.secretKeyRef.optional | bool | `true` |  |
 | kube-prometheus-stack.grafana.persistence.accessModes[0] | string | `"ReadWriteOnce"` |  |
 | kube-prometheus-stack.grafana.persistence.enabled | bool | `true` |  |
 | kube-prometheus-stack.grafana.persistence.size | string | `"10Gi"` |  |
@@ -1404,6 +1075,12 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | kube-prometheus-stack.grafana.serviceAccount.create | bool | `false` |  |
 | kube-prometheus-stack.grafana.serviceAccount.name | string | `"grafana"` |  |
 | kube-prometheus-stack.grafana.sidecar.dashboards.searchNamespace | string | `""` |  |
+| kube-prometheus-stack.kubeControllerManager.enabled | bool | `false` |  |
+| kube-prometheus-stack.kubeEtcd.enabled | bool | `false` |  |
+| kube-prometheus-stack.kubeProxy.enabled | bool | `false` |  |
+| kube-prometheus-stack.kubeScheduler.enabled | bool | `false` |  |
+| kube-prometheus-stack.nodeExporter.operatingSystems.aix.enabled | bool | `false` |  |
+| kube-prometheus-stack.nodeExporter.operatingSystems.darwin.enabled | bool | `false` |  |
 | kube-prometheus-stack.prometheus.prometheusSpec.podMonitorSelectorNilUsesHelmValues | bool | `false` |  |
 | kube-prometheus-stack.prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues | bool | `false` |  |
 | kube-prometheus-stack.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.accessModes[0] | string | `"ReadWriteOnce"` |  |
@@ -1714,6 +1391,18 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | scaledJobs.uhd-matchcore.resources.requests.cpu | string | `"6"` |  |
 | scaledJobs.uhd-matchcore.resources.requests.ephemeral-storage | string | `"1Gi"` |  |
 | scaledJobs.uhd-matchcore.resources.requests.memory | string | `"4Gi"` |  |
+| scaledObjects.compare-pairs.concurrency | int | `2` |  |
+| scaledObjects.compare-pairs.matchcoreThreads | int | `4` |  |
+| scaledObjects.compare-pairs.maxReplicaCount | int | `10` |  |
+| scaledObjects.compare-pairs.minReplicaCount | int | `0` |  |
+| scaledObjects.compare-pairs.queues[0].name | string | `"compare_pairs"` |  |
+| scaledObjects.compare-pairs.queues[0].priority | int | `1` |  |
+| scaledObjects.compare-pairs.resources.limits.cpu | string | `"8"` |  |
+| scaledObjects.compare-pairs.resources.limits.memory | string | `"2Gi"` |  |
+| scaledObjects.compare-pairs.resources.requests.cpu | string | `"8"` |  |
+| scaledObjects.compare-pairs.resources.requests.memory | string | `"2Gi"` |  |
+| scaledObjects.compare-pairs.shutdownTimeout | int | `180` |  |
+| scaledObjects.compare-pairs.targetQueryValue | int | `2` |  |
 | scaledObjects.generic.concurrency | int | `10` |  |
 | scaledObjects.generic.dbFollowerPoolSize | int | `10` |  |
 | scaledObjects.generic.dbPoolSize | int | `10` |  |
@@ -1751,6 +1440,7 @@ Use this checklist to ensure you've replaced more temporary measures with produc
 | smtp.secret.name | string | `"smtp-secrets"` |  |
 | snicketPort | string | `""` |  |
 | snicketProtocol | string | `""` |  |
+| storage.appStorage.location | string | `"/tmp/app_storage"` |  |
 | storage.tmpStorage.enabled | bool | `true` |  |
 | storage.tmpStorage.path | string | `"/tmp/app_tmp"` |  |
 | tolerations | list | `[]` |  |

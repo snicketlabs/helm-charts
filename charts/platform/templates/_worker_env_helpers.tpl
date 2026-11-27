@@ -1,6 +1,10 @@
 {{- define "platform.workerEnvVars" -}}
 - name: AD_SIGNAL_DATABASE_POOL_SIZE
   value: "{{ mul .worker.concurrency 2 }}"
+{{- if .worker.matchcoreThreads }}
+- name: MATCHCORE_THREADS
+  value: {{ .worker.matchcoreThreads | quote }}
+{{- end }}
 {{ include "platform.goodJobWorkerEnvVars" . }}
 {{- end }}
 

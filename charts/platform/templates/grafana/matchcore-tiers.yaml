@@ -265,7 +265,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Dashed lines are the pod's request and limit. MATCHCORE_THREADS is set to the CPU limit in cores and passed to both match and ffmpeg, so a pod can ask for roughly twice its limit \u2014 see sc-24736.",
           "fieldConfig": {
@@ -335,7 +335,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -346,7 +346,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"cpu\"})",
@@ -357,7 +357,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"cpu\"})",
@@ -373,7 +373,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Share of CFS periods in which the container was throttled. Sustained throttling with CPU use below the limit means the thread count is wrong, not that the pod needs more cores.",
           "fieldConfig": {
@@ -462,7 +462,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_cpu_cfs_throttled_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))\n/\nsum by (pod) (rate(container_cpu_cfs_periods_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -478,7 +478,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Working set is what the kernel OOM-kills on. Request equals limit on every matchcore tier, so the two dashed lines overlap; a gap means a tier was retuned and SIZING.md is behind.",
           "fieldConfig": {
@@ -548,7 +548,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "container_memory_working_set_bytes{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}",
@@ -559,7 +559,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"memory\"})",
@@ -570,7 +570,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\", resource=\"memory\"})",
@@ -599,7 +599,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Read and write operations per second against the node's disk. The proxy encode writes into the tmpStorage emptyDir, which is node disk, so a tier starved here shows low CPU and no throttling while wall time climbs.",
           "fieldConfig": {
@@ -669,7 +669,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_fs_reads_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -680,7 +680,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_fs_writes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -696,7 +696,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Bytes per second to and from node disk, the same I/O as the IOPS panel measured by volume. Large sequential proxy writes and small scattered reads look identical in IOPS and very different here.",
           "fieldConfig": {
@@ -766,7 +766,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_fs_reads_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -777,7 +777,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_fs_writes_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\", container=\"{{ $workerContainer }}\"}[$__rate_interval]))",
@@ -793,7 +793,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Source media is streamed from a presigned S3 URL and never lands on disk, so for most tiers this is the real input rate. A job flat here with CPU well under its limit is waiting on the network, not short of cores.",
           "fieldConfig": {
@@ -863,7 +863,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_network_receive_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\"}[$__rate_interval]))",
@@ -874,7 +874,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "sum by (pod) (rate(container_network_transmit_bytes_total{namespace=\"{{ .Release.Namespace }}\", pod=~\"(${tier:regex})-{{ $fullname }}-.*\"}[$__rate_interval]))",
@@ -890,7 +890,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Fraction of wall time each node's disk was busy. Cluster-wide, not scoped to the tier variable: a matchcore job can be slow because something else on its node saturated the disk, and that is invisible from the pod's own counters. Sustained values near 1 mean the device is the limit.",
           "fieldConfig": {
@@ -979,7 +979,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "expr": "rate(node_disk_io_time_seconds_total{device!~\"dm-.*\"}[$__rate_interval])",
@@ -1008,7 +1008,7 @@ data:
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${prometheus}"
           },
           "description": "Tier pods killed for exceeding their memory limit. Uses terminated_reason, NOT last_terminated_reason: scaledJob pods are restartPolicy Never, so they never restart and last_terminated_reason has no series for them at all - an OOM would be invisible. A row here means the tier's memory envelope is too small for that source. Peak memory equal to the limit means the measurement was ceiling-bound and the real demand is unknown.",
           "fieldConfig": {
@@ -1028,7 +1028,7 @@ data:
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "prometheus"
+                "uid": "${prometheus}"
               },
               "editorMode": "code",
               "format": "table",
@@ -1068,6 +1068,17 @@ data:
       ],
       "templating": {
         "list": [
+          {
+            "current": {},
+            "includeAll": false,
+            "label": "Prometheus",
+            "name": "prometheus",
+            "options": [],
+            "query": "prometheus",
+            "refresh": 1,
+            "regex": "",
+            "type": "datasource"
+          },
           {
                 "current": {},
                 "description": "Postgres datasource holding the platform database; the job tables read good_jobs through it.",

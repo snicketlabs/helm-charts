@@ -138,6 +138,12 @@
             "path": { "type": "string" },
             "sizeLimit": { "type": "string" }
           }
+        },
+        "appStorage": {
+          "type": "object",
+          "properties": {
+            "location": { "type": "string" }
+          }
         }
       }
     },
@@ -502,6 +508,8 @@
         "dbPoolSize": { "type": "integer" },
         "dbFollowerPoolSize": { "type": "integer" },
         "shutdownTimeout": { "type": "integer", "minimum": 1 },
+        "matchcoreThreads": { "type": "integer", "minimum": 1 },
+        "targetQueryValue": { "type": "integer", "minimum": 1 },
         "resources": { "$ref": "#/definitions/resources" },
         "pdb": { "$ref": "#/definitions/pdb" },
         "queues": {

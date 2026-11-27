@@ -1,5 +1,5 @@
 # Monitoring
-## Customer Responsibilities Checklist
+## Customer responsibilities checklist
 
 Before enabling monitoring, ensure you provide:
 - Persistent storage (minimum 10Gi) for Prometheus, Grafana, and Loki (if enabled)
@@ -81,7 +81,7 @@ rather than here.
 your own Postgres the dashboard does not render and the pairing has to be
 inferred from the pipeline side: the "Oldest waiting job by queue" panel on the
 Postgres dashboard, and the symptoms described under
-[Recognising a database that cannot keep up](README.md#recognising-a-database-that-cannot-keep-up).
+[Recognising a database that cannot keep up](SCALING.md#recognising-a-database-that-cannot-keep-up).
 
 The existing **AWS RDS** dashboard stays as the raw CloudWatch reference — every
 metric RDS emits. This one answers a single question.
@@ -128,32 +128,55 @@ anyway — its Prometheus panels work and its two SQL panels stay empty.
 
 Then two things are yours to do:
 
-**1. Mount the Grafana role's password into your Grafana.** The datasource reads
-it with `$__file{/etc/secrets/password}`:
+**1. Give your Grafana the Grafana role's password as an environment variable.**
+The datasource reads it with `$__env{PLATFORM_GRAFANA_PG_PASSWORD}`:
 
 ```yaml
-extraSecretMounts:
-  - name: pg-secrets
-    secretName: platform-grafana-postgres-ro
-    mountPath: /etc/secrets
-    readOnly: true
-    optional: true
-    items:
-      - key: password
-        path: password
+envValueFrom:
+  PLATFORM_GRAFANA_PG_PASSWORD:
+    secretKeyRef:
+      name: platform-grafana-postgres-ro
+      key: password
+      optional: true
 ```
 
-Grafana resolves `$__file{}` at startup and **will not start** with a datasource
-it cannot provision, so do this before enabling `postgresDashboards`, not after.
+Grafana reads the variable at pod start. If it is unset the datasource has no
+password and its panels fail with an authentication error, so set it before
+enabling `postgresDashboards`.
 
-If you run with `monitoring.postgresDashboards.autoCreateRole: false`, that
-Secret is yours to create too — see
-[Database roles this chart creates](README.md#database-roles-this-chart-creates).
+If you run with `monitoring.postgresDashboards.autoCreateRole: false`,
+the role and its Secret are yours to create too — see
+[The Grafana database role](#the-grafana-database-role).
 
 **2. Make sure your Prometheus selects them.** Your `ServiceMonitor` and
 `PodMonitor` selectors have to reach this namespace, and KEDA's, for queue depth.
 The bundled stack sets `serviceMonitorSelectorNilUsesHelmValues: false` for
 exactly this reason.
+
+## The Grafana database role
+
+Grafana's Postgres datasource uses its own read-only role, `db_grafana_ro`, with
+`SELECT` on the five tables the dashboards read: `good_jobs`,
+`good_job_processes`, `jobs`, `ingest_masters` and `materials`. The datasource
+runs whatever SQL someone types into Explore, which is why it never uses the
+application's database user. How the chart creates this role, and why it is
+separate from KEDA's, is in
+[Database roles this chart creates](README.md#database-roles-this-chart-creates).
+
+Configure it with `monitoring.postgresDashboards.roleName` and
+`monitoring.postgresDashboards.autoCreateRole`. With `autoCreateRole: false`,
+create the role yourself:
+
+```sql
+CREATE ROLE db_grafana_ro LOGIN PASSWORD 'choose-a-strong-password';
+GRANT CONNECT ON DATABASE your_database_name TO db_grafana_ro;
+GRANT USAGE ON SCHEMA public TO db_grafana_ro;
+GRANT SELECT ON good_jobs, good_job_processes, jobs, ingest_masters, materials TO db_grafana_ro;
+```
+
+Then store its password in the Secret your Grafana mounts (see step 1 of
+[Bringing your own Prometheus and Grafana](#bringing-your-own-prometheus-and-grafana)).
+If a grant is missing, the panels that read that table show a permissions error.
 
 ## PodMonitor and ServiceMonitor
 
@@ -161,7 +184,7 @@ The chart uses Prometheus PodMonitor and ServiceMonitor resources to automatical
 
 If your cluster does not include support for `PodMonitor` or `ServiceMonitor` objects or you have not set `monitoring.enabled = true` you may disable them by setting `metrics.enabled = false`
 
-## Backup Guidance
+## Backup guidance
 
 If you enable persistence for Prometheus or Grafana, ensure you back up the associated PVCs regularly. For more information, see [Kubernetes Volume Snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) or your cloud provider's backup tools.
 
@@ -183,7 +206,79 @@ kubectl delete pvc -n <namespace> <prometheus-pvc> <loki-pvc>
 - **Storage full:** Increase PVC size or clean up old data.
 - **No logs:** Verify your log aggregation solution is running and pods are configured to emit logs to the correct location.
 
-## Version Compatibility
+### Postgres panels fail behind a WAF
+
+If the Postgres panels error while everything else on the same dashboard loads,
+and the error text is an HTML block page rather than a database message, a web
+application firewall is eating the request.
+
+Grafana's Postgres datasource posts the literal SQL in the body of a request to
+`/api/ds/query`:
+
+```text
+SELECT queue_name, ... FROM good_jobs WHERE finished_at IS NULL ...
+```
+
+Managed WAF rulesets match that as an SQL injection attempt and block it.
+Cloudflare returns its "Attention Required" page, with wording about *"submitting
+a certain word or phrase, a SQL command or malformed data"*. Grafana shows the
+whole page as the query error.
+
+Prometheus and CloudWatch panels are unaffected — their request bodies do not
+look like SQL — so the failure is selective in a way that points at the
+dashboards rather than at the proxy.
+
+**There is nothing to change in this chart.** Posting SQL is how the datasource
+works. Your options are:
+
+- Add a WAF bypass or exception for Grafana's `/api/ds/query` path.
+- Do not front Grafana with the WAF.
+- Reach Grafana without going through it, which is enough for a quick check:
+
+```bash
+kubectl port-forward -n <ns> svc/<release>-grafana 3000:80
+```
+
+Then browse `http://localhost:3000`. If you set `grafana.ini` `serve_from_sub_path`
+with a `root_url` ending in a path, append that path too.
+
+Checking from inside the cluster hides this entirely — a `kubectl exec ... curl
+localhost:3000` test passes while the browser fails, because only the browser
+goes through the proxy.
+
+### A datasource change that does not take effect
+
+Dashboards and datasources reload differently, and the difference is invisible
+until it bites:
+
+- **Dashboards poll.** The sidecar writes the file, Grafana's dashboard
+  provisioner rescans the directory on a timer and picks it up.
+- **Datasources do not.** Grafana reads them at startup, or when something calls
+  its admin provisioning API. The sidecar makes that call.
+
+So if the sidecar cannot authenticate to Grafana, dashboards keep updating while
+datasources silently stay as they were. New panels appear, pointed at an old
+datasource — which looks exactly like a chart that shipped a broken dashboard.
+
+The tell is in the Grafana pod logs:
+
+```text
+POST /api/admin/provisioning/datasources/reload → 401
+error="[password-auth.failed] too many consecutive incorrect login attempts"
+```
+
+The usual cause is a Grafana admin password that no longer matches its database:
+Grafana applies the Secret's password only when it first creates its database.
+Reset it and restart:
+
+```bash
+PW=$(kubectl get secret <release>-grafana -n <ns> -o jsonpath='{.data.admin-password}' | base64 -d)
+kubectl exec -n <ns> deploy/<release>-grafana -c grafana -- grafana cli admin reset-admin-password "$PW"
+kubectl rollout restart -n <ns> deploy/<release>-grafana
+```
+
+
+## Version compatibility
 
 The monitoring subcharts need nothing beyond the chart's own [prerequisites](README.md#prerequisites) (Kubernetes 1.32+, Helm 3.16+ or Helm 4).
 

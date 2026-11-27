@@ -351,7 +351,7 @@ CREATEROLE (common for BYOP/onprem Postgres where the customer intentionally
 scopes the credentials they hand over), so those errors are caught and logged
 as a warning instead of aborting — a failed helm install/upgrade over this
 would be worse than KEDA autoscaling simply not being configured yet. See
-docs/README.md for the manual fallback.
+SCALING.md ("Manual setup") for the manual fallback.
 
 A missing good_jobs/good_job_processes table does fail the Job: it runs right
 after the schema is loaded or migrated (platform.dbPrepareCommand), so a
@@ -467,7 +467,7 @@ only thing most people set: leave a dashboard flag unset and it follows the
 monitoring stack, set it explicitly and you get exactly that.
 
 The datasource dashboards cannot simply default on, because a Grafana we do not
-install is one we cannot wire. Grafana resolves $__file{} at startup and a
+install is one we cannot wire. Grafana resolves $__env{} at startup and a
 datasource it cannot provision stops it coming up, so rendering a Postgres
 datasource into someone else's Grafana breaks it. Two conditions have to hold
 before we turn it on by ourselves:
