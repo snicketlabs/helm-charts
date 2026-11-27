@@ -70,7 +70,8 @@ goodJob:
   shutdownTimeout: 600 # seconds a scaledJob task pod lets its job finish after SIGTERM (GOOD_JOB_SHUTDOWN_TIMEOUT). A task still running after this is interrupted and retried, and counts towards its retry limit, so cover your longest tasks
   shutdownGraceSeconds: 60 # headroom added to the drain time to get terminationGracePeriodSeconds (workers and scaledJobs)
 
-# KEDA is a hard prerequisite of this chart — see docs/README.md. There is no
+# KEDA is a hard prerequisite of this chart — install it as shown in the README
+# prerequisites (docs/README.md); SCALING.md explains the options. There is no
 # static-worker fallback; every worker is a ScaledObject or ScaledJob.
 kedaAutoScaling:
   # KEDA scales on the good_jobs table directly, mirroring the pattern proven in
@@ -85,10 +86,10 @@ kedaAutoScaling:
     host: ""
     port: 5432
     # When true (default), a Job creates/converges a dedicated read-only Postgres
-    # role (roleName) with SELECT on good_jobs only — not pg_read_all_data — and
-    # never fails the install/upgrade if the DB user lacks CREATEROLE (common for
-    # BYOP/onprem). See docs/README.md "Manual KEDA role setup" for the fallback
-    # if your Postgres can't grant that automatically.
+    # role (roleName) with SELECT on good_jobs and good_job_processes only — not
+    # pg_read_all_data — and never fails the install/upgrade if the DB user lacks
+    # CREATEROLE (common for BYOP/onprem). See SCALING.md "Manual setup" for the
+    # fallback if your Postgres can't grant that automatically.
     autoCreateRole: true
     roleName: db_keda_ro
     dbUser: "" # defaults to roleName if unset — leave unset unless you're using autoCreateRole: false with your own pre-existing role under a different name
@@ -316,7 +317,7 @@ scaledObjects:
 # ("2000m" -> "2", "0.75" -> "750m", "2048Mi" -> "2Gi", "1.5Gi" -> "1536Mi").
 # That rewrite hands server-side-apply ownership of the field to KEDA, and every
 # later Helm upgrade then fails with "conflict with manager keda". See the
-# "Upgrades and field conflicts" section of the chart documentation.
+# "Upgrades and field conflicts" section of SCALING.md.
 #
 # Rules: no trailing "000" on cpu millis, no decimal points, and use the largest
 # binary suffix that divides exactly. Quote bare integers so they stay strings.
@@ -326,7 +327,7 @@ scaledObjects:
 # values.schema.json enforces what a pattern can express: decimals, bare YAML
 # numbers and whole-core millicores. It cannot express divisibility, so 4096Mi
 # passes validation and is still rewritten to 4Gi. If an upgrade fails with
-# "conflict with manager keda", that is the cause — see docs/README.md
+# "conflict with manager keda", that is the cause — see SCALING.md
 # "Upgrades and field conflicts" for the --force-conflicts remedy.
 scaledJobs:
   # --- matchcore fingerprinting -------------------------------------------------

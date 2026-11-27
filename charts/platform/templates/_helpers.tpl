@@ -351,7 +351,7 @@ CREATEROLE (common for BYOP/onprem Postgres where the customer intentionally
 scopes the credentials they hand over), so those errors are caught and logged
 as a warning instead of aborting — a failed helm install/upgrade over this
 would be worse than KEDA autoscaling simply not being configured yet. See
-docs/README.md for the manual fallback.
+SCALING.md ("Manual setup") for the manual fallback.
 
 A missing good_jobs/good_job_processes table does fail the Job: it runs right
 after the schema is loaded or migrated (platform.dbPrepareCommand), so a

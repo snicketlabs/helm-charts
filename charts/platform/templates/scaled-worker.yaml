@@ -43,10 +43,7 @@ metadata:
 spec:
   strategy:
     type: {{ $.Values.workerDeploymentStrategy | default "RollingUpdate" }}
-  {{- /* KEDA owns replicas; set it only on install so Helm never conflicts with KEDA's scale (Helm 4 server-side apply). */}}
-  {{- if $.Release.IsInstall }}
-  replicas: {{ $worker.minReplicaCount }}
-  {{- end }}
+  {{- /* KEDA owns replicas. Never render it: if Helm claims the field, an upgrade resets KEDA's live value and can conflict with it. */}}
   selector:
     matchLabels:
       {{- include "platform.selectorLabels" $ | nindent 6 }}
